@@ -15,13 +15,13 @@ Independent PAPER bot for PancakeSwap Prediction using the Fusion EV ensemble an
 
 FUSION-222 uses the **same PostgreSQL database as the main `fusion-ev` bot**.
 
-It reads the historical main Fusion decisions from `paper_decisions` and round history from `round_history`, but writes its own records only to:
+It auto-detects the existing main Fusion decisions table and round-history table inside the shared PostgreSQL database. The historical main Fusion decisions table is read-only for FUSION-222. It writes its own records only to:
 
 - `fusion222_v1366_decisions`
 - `fusion222_v1366_state`
 - `fusion222_v1366_snapshots`
 
-The main `paper_decisions` history is read-only for FUSION-222. The corrected private table names are intentionally different from the earlier draft so an accidentally initialized ALL_VERSIONS state cannot contaminate the corrected accounting.
+The auto-detected main Fusion decisions history is read-only for FUSION-222. The corrected private table names are intentionally different from the earlier draft so an accidentally initialized ALL_VERSIONS state cannot contaminate the corrected accounting.
 
 ## Retro initialization — v1.3.6.6 ONLY
 
@@ -56,3 +56,9 @@ The timer starts at the first v1.3.6.6 stored decision (`2026-07-23T09:35:57Z`),
 - `/history/export-retro.csv`
 - `/history/export-live.csv`
 - `/shadow/performance`
+
+## v1.0.4 startup hardening
+
+This build fixes the Railway startup failure `KeyError: 0` caused by mixing psycopg2 tuple cursors and `RealDictCursor` rows. All scalar DB reads now use a cursor-shape-agnostic adapter. It also fixes the latent JSONB default issue in `ALTER TABLE ... ADD COLUMN` paths, where literal JSON braces must stay single (`'{}'`) rather than escaped (`'{{}}'`).
+
+Regression coverage now includes the exact `initialize_retro_state()` path that failed on Railway, plus source checks preventing direct `fetchone()[0]` access from returning to `db.py`.

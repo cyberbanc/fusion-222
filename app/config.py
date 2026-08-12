@@ -49,7 +49,7 @@ def _csv_strings(name: str, default: Iterable[str]) -> tuple[str, ...]:
 @dataclass(frozen=True)
 class Settings:
     service_name: str = os.getenv("SERVICE_NAME", "FUSION-222")
-    version: str = os.getenv("MODEL_VERSION", "FUSION-222-v1.0.1")
+    version: str = os.getenv("MODEL_VERSION", "FUSION-222-v1.0.4")
     retro_anchor_version: str = os.getenv("RETRO_ANCHOR_VERSION", "1.3.6.6")
     # Historical dashboard/replay scope. FUSION-222 must start from the
     # v1.3.6.6 slice only, not from ALL_VERSIONS.

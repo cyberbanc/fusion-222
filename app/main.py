@@ -19,7 +19,7 @@ from .worker import bootstrap_rounds, loop, signal_cache, status as worker_statu
 
 _STOP: Optional[asyncio.Event] = None
 _TASK: Optional[asyncio.Task] = None
-_BUILD_REVISION = "fusion-222-v1.0.3-sql-jsonb-format-hotfix-v1366-only"
+_BUILD_REVISION = "fusion-222-v1.0.4-startup-hardening-v1366-only"
 
 
 def _json_safe(value: Any) -> Any:

@@ -1,3 +1,12 @@
+FUSION-222 v1.0.4 STARTUP HARDENING
+
+- Fixed Railway startup KeyError: 0 caused by indexing a RealDictCursor row with [0].
+- Added cursor-shape-agnostic scalar extraction for tuple and mapping rows.
+- Hardened every scalar fetch in db.py so the same cursor mismatch cannot recur elsewhere.
+- Fixed latent JSONB ALTER TABLE defaults: fragments now use valid '{}' JSON because they are inserted without a second sql.SQL.format pass.
+- Keeps DB autodetection, v1.3.6.6-only retro replay, shared main Fusion DB read-only history, private FUSION-222 tables, fixed $22 and the new filters.
+- Added regression tests for tuple/RealDict cursor shapes and static startup hazards.
+
 FUSION-222 CHANGELOG
 
 v1.0.3 — SQL/JSONB startup hotfix

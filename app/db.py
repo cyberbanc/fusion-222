@@ -6,6 +6,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Iterable
+from collections.abc import Mapping
 
 import psycopg2
 from psycopg2 import sql
@@ -43,12 +44,35 @@ def _ident(name: str):
     return sql.Identifier(name)
 
 
+def _first_scalar(row: Any, *, key: str | None = None, default: Any = None) -> Any:
+    """Return the first scalar from either a tuple cursor row or RealDictCursor row.
+
+    psycopg2 standard cursors return tuples while RealDictCursor returns mapping-like
+    rows. Startup code uses both cursor types, so direct ``row[0]`` access is unsafe
+    when a RealDictCursor is passed into a helper. This adapter makes scalar reads
+    cursor-type agnostic and prevents startup failures caused by cursor shape.
+    """
+    if row is None:
+        return default
+    if isinstance(row, Mapping):
+        if key is not None and key in row:
+            return row[key]
+        try:
+            return next(iter(row.values()))
+        except StopIteration:
+            return default
+    try:
+        return row[0]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
 def _table_exists(cur, name: str) -> bool:
     cur.execute(
         "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=%s)",
         (name,),
     )
-    return bool(cur.fetchone()[0])
+    return bool(_first_scalar(cur.fetchone(), default=False))
 
 
 def _existing_tables(cur) -> set[str]:
@@ -347,9 +371,9 @@ def init_db() -> None:
                 "stake": "DOUBLE PRECISION NOT NULL DEFAULT 0",
                 "bank_before": "DOUBLE PRECISION",
                 "components_json": "JSONB NOT NULL DEFAULT '[]'::jsonb",
-                "weights_json": "JSONB NOT NULL DEFAULT '{{}}'::jsonb",
-                "features_json": "JSONB NOT NULL DEFAULT '{{}}'::jsonb",
-                "snapshot_json": "JSONB NOT NULL DEFAULT '{{}}'::jsonb",
+                "weights_json": "JSONB NOT NULL DEFAULT '{}'::jsonb",
+                "features_json": "JSONB NOT NULL DEFAULT '{}'::jsonb",
+                "snapshot_json": "JSONB NOT NULL DEFAULT '{}'::jsonb",
                 "settled": "BOOLEAN NOT NULL DEFAULT FALSE",
                 "final_winner": "TEXT",
                 "final_coeff_gross": "DOUBLE PRECISION",
@@ -379,7 +403,7 @@ def init_db() -> None:
                 "selection_reason": "TEXT",
                 "shadow_allowed": "BOOLEAN",
                 "shadow_reason": "TEXT",
-                "shadow_stats_json": "JSONB NOT NULL DEFAULT '{{}}'::jsonb",
+                "shadow_stats_json": "JSONB NOT NULL DEFAULT '{}'::jsonb",
                 "shadow_pnl": "DOUBLE PRECISION",
                 "stake_mode": "TEXT",
                 "stake_tier": "TEXT",
@@ -453,7 +477,7 @@ def ping() -> bool:
     try:
         with conn() as c, c.cursor() as cur:
             cur.execute("SELECT 1")
-            return bool(cur.fetchone()[0])
+            return bool(_first_scalar(cur.fetchone(), default=False))
     except Exception:
         return False
 
@@ -545,7 +569,7 @@ def _retro_cutoff_epoch() -> int:
             ).format(_ident(_BASE_DECISIONS_TABLE)),
             (SETTINGS.retro_scope_version,),
         )
-        return int(cur.fetchone()[0] or 0)
+        return int(_first_scalar(cur.fetchone(), default=0) or 0)
 
 
 def _retro_replay(cutoff_epoch: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -715,9 +739,9 @@ def initialize_retro_state() -> None:
         # live trades exist; otherwise fail loudly rather than silently mixing
         # incompatible accounting histories.
         cur.execute(
-            sql.SQL("SELECT COUNT(*) FROM {} WHERE COALESCE(settled,FALSE)=TRUE AND COALESCE(trade_executed,FALSE)=TRUE").format(_ident(_DECISIONS_TABLE))
+            sql.SQL("SELECT COUNT(*) AS live_trades FROM {} WHERE COALESCE(settled,FALSE)=TRUE AND COALESCE(trade_executed,FALSE)=TRUE").format(_ident(_DECISIONS_TABLE))
         )
-        live_trades = int(cur.fetchone()[0] or 0)
+        live_trades = int(_first_scalar(cur.fetchone(), key="live_trades", default=0) or 0)
         if bool(state.get("retro_initialized")) and not scope_ok and live_trades > 0:
             c.rollback()
             raise RuntimeError(
@@ -1037,7 +1061,7 @@ def history_count(*, settled_only: bool = False, trades_only: bool = False) -> i
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
     with conn() as c, c.cursor() as cur:
         cur.execute(sql.SQL("SELECT COUNT(*) FROM {}{}").format(_ident(_DECISIONS_TABLE), sql.SQL(where)))
-        return int(cur.fetchone()[0])
+        return int(_first_scalar(cur.fetchone(), default=0) or 0)
 
 
 def retro_history(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:

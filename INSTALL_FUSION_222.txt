@@ -1,4 +1,4 @@
-FUSION-222 v1.0.3 — INSTALL (v1.3.6.6 RETRO ONLY)
+FUSION-222 v1.0.4 — INSTALL (v1.3.6.6 RETRO ONLY)
 ======================================================
 
 1. Create/update the Railway service `fusion-222` from this GitHub package.
@@ -43,8 +43,9 @@ FUSION-222 v1.0.3 — INSTALL (v1.3.6.6 RETRO ONLY)
 
    If the main v1.3.6.6 database has newer settled decisions before first boot, values can differ slightly.
 
-9. Generate/assign Railway public domain `fusion-222.up.railway.app`.
-   If Railway gives another domain, change only API_BASE in TILDA_FUSION_222.html/.txt.
+9. Use the existing Railway public domain shown for this service:
+   `fusion-222-production.up.railway.app`.
+   TILDA_FUSION_222.html/.txt in this package is already pointed to that domain.
 
 10. Paste TILDA_FUSION_222.html into a Tilda T123 HTML block.
 
