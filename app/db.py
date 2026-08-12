@@ -600,9 +600,6 @@ def _retro_replay(cutoff_epoch: int) -> tuple[list[dict[str, Any]], dict[str, An
         candidates.append(row)
 
     selected: list[dict[str, Any]] = []
-    breaker_losses = 0
-    breaker_remaining = 0
-    breaker_triggers = 0
     current_loss_streak = 0
     max_loss_streak = 0
 
@@ -617,10 +614,6 @@ def _retro_replay(cutoff_epoch: int) -> tuple[list[dict[str, Any]], dict[str, An
 
     for row in candidates:
         version = SETTINGS.retro_scope_version
-
-        if breaker_remaining > 0:
-            breaker_remaining -= 1
-            continue
 
         signal = str(row.get("signal") or "")
         winner = str(row.get("final_winner") or "")
@@ -667,16 +660,10 @@ def _retro_replay(cutoff_epoch: int) -> tuple[list[dict[str, Any]], dict[str, An
         if outcome == "WIN":
             wins += 1
             current_loss_streak = 0
-            breaker_losses = 0
         else:
             losses += 1
             current_loss_streak += 1
             max_loss_streak = max(max_loss_streak, current_loss_streak)
-            breaker_losses += 1
-            if SETTINGS.breaker_loss_trigger > 0 and breaker_losses >= SETTINGS.breaker_loss_trigger:
-                breaker_remaining = max(breaker_remaining, SETTINGS.breaker_skip_signals)
-                breaker_losses = 0
-                breaker_triggers += 1
 
     anchor_started_at = rows[0].get("created_at") if rows else None
 
@@ -697,9 +684,9 @@ def _retro_replay(cutoff_epoch: int) -> tuple[list[dict[str, Any]], dict[str, An
         "peak_bank": peak,
         "min_bank": min_bank,
         "max_drawdown": max_drawdown,
-        "breaker_loss_count": breaker_losses,
-        "breaker_signals_remaining": breaker_remaining,
-        "breaker_trigger_count": breaker_triggers,
+        "breaker_loss_count": 0,
+        "breaker_signals_remaining": 0,
+        "breaker_trigger_count": 0,
         "retro_cutoff_epoch": int(cutoff_epoch),
         "retro_scope_version": SETTINGS.retro_scope_version,
         "last_settled_epoch": selected[-1].get("betting_epoch") if selected else None,
@@ -879,9 +866,10 @@ def settle_decision_atomic(
         gl = float(state.get("gross_loss") or 0.0)
         current_loss = int(state.get("current_loss_streak") or 0)
         max_loss = int(state.get("max_loss_streak") or 0)
-        breaker_losses = int(state.get("breaker_loss_count") or 0)
-        breaker_remaining = int(state.get("breaker_signals_remaining") or 0)
-        breaker_triggers = int(state.get("breaker_trigger_count") or 0)
+        # Legacy columns remain in the state schema, but the circuit breaker is disabled.
+        breaker_losses = 0
+        breaker_remaining = 0
+        breaker_triggers = 0
 
         if trade_executed:
             trades += 1
@@ -892,20 +880,13 @@ def settle_decision_atomic(
             if outcome == "WIN":
                 wins += 1
                 current_loss = 0
-                breaker_losses = 0
             elif outcome == "LOSS":
                 losses += 1
                 current_loss += 1
                 max_loss = max(max_loss, current_loss)
-                breaker_losses += 1
-                if SETTINGS.breaker_loss_trigger > 0 and breaker_losses >= SETTINGS.breaker_loss_trigger:
-                    breaker_remaining = max(breaker_remaining, int(SETTINGS.breaker_skip_signals))
-                    breaker_losses = 0
-                    breaker_triggers += 1
             else:
                 draws += 1
                 current_loss = 0
-                breaker_losses = 0
 
         peak = max(float(state.get("peak_bank") or bank_before), bank)
         min_bank = min(float(state.get("min_bank") or bank_before), bank)
@@ -946,26 +927,6 @@ def settle_decision_atomic(
         changed = cur.rowcount == 1
         c.commit()
         return changed
-
-
-def consume_breaker_signal() -> bool:
-    """Consume one pending breaker slot.
-
-    Call this only after EV/probability/payout/shadow/PF filters pass so skipped
-    ordinary rounds do not reduce the 3-signal protection window.
-    """
-    with _LOCK, conn() as c, c.cursor(cursor_factory=RealDictCursor) as cur:
-        state = get_state(for_update=True, cursor=cur)
-        remaining = int(state.get("breaker_signals_remaining") or 0)
-        if remaining <= 0:
-            c.commit()
-            return False
-        cur.execute(
-            sql.SQL("UPDATE {} SET breaker_signals_remaining=%s,updated_at=NOW() WHERE id=1").format(_ident(_STATE_TABLE)),
-            (remaining - 1,),
-        )
-        c.commit()
-        return True
 
 
 def upsert_round(data: dict[str, Any]) -> None:

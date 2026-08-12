@@ -1,3 +1,16 @@
+FUSION-222 CHANGELOG
+====================
+
+v1.0.5 — NO BREAKER
+- Removed 3 LOSS -> skip next 3 eligible signals from forward trading.
+- Removed breaker from retro replay.
+- Fixed stake remains $22.
+- EV>=2%, selected probability>=53%, payout-ready, Shadow Recent, Quality PF>=0.85 remain unchanged.
+- Quality WR remains display-only.
+- New isolated tables: fusion222_v1366_nobreaker_decisions/state/snapshots.
+- New tables force clean retro initialization and preserve v1.0.4 as archive.
+- Retains v1.0.4 startup hardening, DB auto-detection and cursor-shape fixes.
+
 FUSION-222 v1.0.4 STARTUP HARDENING
 
 - Fixed Railway startup KeyError: 0 caused by indexing a RealDictCursor row with [0].

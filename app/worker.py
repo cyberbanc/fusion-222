@@ -182,15 +182,6 @@ def create_locked_decision(snapshot) -> dict[str, Any]:
         allowed = False
         no_trade_reason = shadow_reason
 
-    # Crucial FUSION-222 behavior: the circuit breaker consumes only an
-    # otherwise-eligible signal. Ordinary NO_TRADE rounds do not shorten it.
-    breaker_applied = False
-    if allowed:
-        breaker_applied = db.consume_breaker_signal()
-        if breaker_applied:
-            allowed = False
-            no_trade_reason = "BREAKER_SKIP_AFTER_3_LOSSES"
-
     stake_decision = fixed_stake_decision()
     stake = stake_decision.stake if allowed else 0.0
     trade_executed = allowed and stake_decision.eligible and stake > 0.0
@@ -205,7 +196,7 @@ def create_locked_decision(snapshot) -> dict[str, Any]:
             "strategy": "FUSION-222",
             "trade_executed": trade_executed,
             "no_trade_reason": no_trade_reason,
-            "trade_rule": "EV>=2%_P>=53%_SHADOW_RECENT_QUALITY_PF_BREAKER_3x3_FIXED22" if trade_executed else "NO_TRADE",
+            "trade_rule": "EV>=2%_P>=53%_SHADOW_RECENT_QUALITY_PF_FIXED22" if trade_executed else "NO_TRADE",
             "min_trade_ev": SETTINGS.min_trade_ev,
             "min_signal_probability": SETTINGS.min_signal_probability,
             "selected_probability": selected_probability,
@@ -219,9 +210,6 @@ def create_locked_decision(snapshot) -> dict[str, Any]:
             "selected_payout_bucket_ready": selected_ready,
             "stake_mode": "fixed_22",
             "stake_tier": stake_tier,
-            "breaker_applied": breaker_applied,
-            "breaker_loss_trigger": SETTINGS.breaker_loss_trigger,
-            "breaker_skip_signals": SETTINGS.breaker_skip_signals,
         }
     )
 
@@ -263,7 +251,7 @@ def create_locked_decision(snapshot) -> dict[str, Any]:
             "shadow_stats_json": shadow_stats,
             "stake_mode": "fixed_22",
             "stake_tier": stake_tier,
-            "breaker_applied": breaker_applied,
+            "breaker_applied": False,
             "origin": "LIVE",
         }
     )
@@ -310,7 +298,6 @@ def tick() -> dict[str, Any]:
             "fixed_stake": SETTINGS.fixed_stake,
             "min_trade_ev": SETTINGS.min_trade_ev,
             "min_signal_probability": SETTINGS.min_signal_probability,
-            "breaker_signals_remaining": int(state.get("breaker_signals_remaining") or 0),
             "settled_now": settled,
             "sync": sync,
             "rpc": client.rpc_status(),
@@ -346,7 +333,7 @@ def status() -> dict[str, Any]:
     state = db.get_state() if db.enabled() else {}
     return {
         "enabled": SETTINGS.worker_enabled,
-        "strategy": "fusion_222_ev2_prob53_shadow_recent_quality_pf_breaker3x3_fixed22",
+        "strategy": "fusion_222_ev2_prob53_shadow_recent_quality_pf_fixed22",
         "version": SETTINGS.version,
         "stake_mode": "fixed_22",
         "fixed_stake": SETTINGS.fixed_stake,
@@ -360,10 +347,6 @@ def status() -> dict[str, Any]:
         "quality_min_win_rate": SETTINGS.quality_min_win_rate,
         "quality_win_rate_filter_enabled": SETTINGS.quality_win_rate_filter_enabled,
         "quality_min_profit_factor": SETTINGS.quality_min_profit_factor,
-        "breaker_loss_trigger": SETTINGS.breaker_loss_trigger,
-        "breaker_skip_signals": SETTINGS.breaker_skip_signals,
-        "breaker_signals_remaining": int(state.get("breaker_signals_remaining") or 0),
-        "breaker_loss_count": int(state.get("breaker_loss_count") or 0),
         "require_payout_bucket_ready": SETTINGS.require_payout_bucket_ready,
         "last_tick": last_tick,
     }

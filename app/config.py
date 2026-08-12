@@ -49,7 +49,7 @@ def _csv_strings(name: str, default: Iterable[str]) -> tuple[str, ...]:
 @dataclass(frozen=True)
 class Settings:
     service_name: str = os.getenv("SERVICE_NAME", "FUSION-222")
-    version: str = os.getenv("MODEL_VERSION", "FUSION-222-v1.0.4")
+    version: str = os.getenv("MODEL_VERSION", "FUSION-222-v1.0.5")
     retro_anchor_version: str = os.getenv("RETRO_ANCHOR_VERSION", "1.3.6.6")
     # Historical dashboard/replay scope. FUSION-222 must start from the
     # v1.3.6.6 slice only, not from ALL_VERSIONS.
@@ -58,9 +58,9 @@ class Settings:
     database_url: str = os.getenv("DATABASE_URL", "")
     base_decisions_table: str = os.getenv("BASE_DECISIONS_TABLE", "auto")
     base_rounds_table: str = os.getenv("BASE_ROUNDS_TABLE", "auto")
-    bot_decisions_table: str = os.getenv("BOT_DECISIONS_TABLE", "fusion222_v1366_decisions")
-    bot_state_table: str = os.getenv("BOT_STATE_TABLE", "fusion222_v1366_state")
-    bot_snapshots_table: str = os.getenv("BOT_SNAPSHOTS_TABLE", "fusion222_v1366_snapshots")
+    bot_decisions_table: str = os.getenv("BOT_DECISIONS_TABLE", "fusion222_v1366_nobreaker_decisions")
+    bot_state_table: str = os.getenv("BOT_STATE_TABLE", "fusion222_v1366_nobreaker_state")
+    bot_snapshots_table: str = os.getenv("BOT_SNAPSHOTS_TABLE", "fusion222_v1366_nobreaker_snapshots")
 
     bsc_rpc_urls: tuple[str, ...] = _csv_strings(
         "BSC_RPC_URLS",
@@ -160,11 +160,6 @@ class Settings:
     quality_min_win_rate: float = _float("QUALITY_MIN_WIN_RATE", 0.45)
     quality_min_profit_factor: float = _float("QUALITY_MIN_PROFIT_FACTOR", 0.85)
     quality_win_rate_filter_enabled: bool = _bool("QUALITY_WIN_RATE_FILTER_ENABLED", False)
-
-    # Circuit breaker: after 3 executed losses, skip the next 3 otherwise
-    # eligible signals. Ineligible/no-trade rounds do not consume the breaker.
-    breaker_loss_trigger: int = _int("BREAKER_LOSS_TRIGGER", 3)
-    breaker_skip_signals: int = _int("BREAKER_SKIP_SIGNALS", 3)
 
     # Historical replay used to initialize the virtual bank. Only the
     # RETRO_SCOPE_VERSION slice is replayed.

@@ -1,10 +1,10 @@
-# FUSION-222 v1.0.4 — SAME Railway project / SAME Postgres as main fusion-ev
+# FUSION-222 v1.0.5 — SAME Railway project / SAME Postgres as main fusion-ev
 # Dashboard retro accounting is STRICTLY strategy_version=1.3.6.6 only.
 
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 
 SERVICE_NAME=FUSION-222
-MODEL_VERSION=FUSION-222-v1.0.4
+MODEL_VERSION=FUSION-222-v1.0.5
 RETRO_ANCHOR_VERSION=1.3.6.6
 RETRO_SCOPE_VERSION=1.3.6.6
 
@@ -12,11 +12,11 @@ RETRO_SCOPE_VERSION=1.3.6.6
 BASE_DECISIONS_TABLE=auto
 BASE_ROUNDS_TABLE=auto
 
-# Corrected private FUSION-222 tables. Keep these names exactly to avoid
-# mixing with the earlier ALL_VERSIONS draft state.
-BOT_DECISIONS_TABLE=fusion222_v1366_decisions
-BOT_STATE_TABLE=fusion222_v1366_state
-BOT_SNAPSHOTS_TABLE=fusion222_v1366_snapshots
+# v1.0.5 NO-BREAKER private tables. New names force a clean retro replay
+# and prevent the old v1.0.4 breaker state from contaminating accounting.
+BOT_DECISIONS_TABLE=fusion222_v1366_nobreaker_decisions
+BOT_STATE_TABLE=fusion222_v1366_nobreaker_state
+BOT_SNAPSHOTS_TABLE=fusion222_v1366_nobreaker_snapshots
 
 BSC_RPC_URL=https://bsc-dataseed.bnbchain.org
 BSC_RPC_URLS=https://bsc-dataseed.bnbchain.org,https://bsc-dataseed.binance.org
@@ -63,8 +63,6 @@ QUALITY_MIN_WIN_RATE=0.45
 QUALITY_WIN_RATE_FILTER_ENABLED=false
 QUALITY_MIN_PROFIT_FACTOR=0.85
 
-BREAKER_LOSS_TRIGGER=3
-BREAKER_SKIP_SIGNALS=3
 RETRO_REPLAY_ENABLED=true
 
 PROBABILITY_SHRINK=0.75

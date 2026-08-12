@@ -23,12 +23,11 @@ def make_forecast(ev=0.03, p=0.55):
     )
 
 
-def prep(monkeypatch, ev=0.03, p=0.55, breaker=False, shadow_allowed=True):
+def prep(monkeypatch, ev=0.03, p=0.55, shadow_allowed=True):
     snap = Snapshot(betting_epoch=123, live_epoch=122, chain_timestamp=1000, seconds_to_lock=40)
     monkeypatch.setattr(worker.db, "get_decision", lambda epoch: None)
     monkeypatch.setattr(worker, "forecast", lambda current: make_forecast(ev, p))
     monkeypatch.setattr(worker, "evaluate_shadow", lambda *args: (shadow_allowed, "SHADOW_QUALITY_PF_CONFIRMED" if shadow_allowed else "QUALITY_PROFIT_FACTOR_BELOW_MINIMUM", {}))
-    monkeypatch.setattr(worker.db, "consume_breaker_signal", lambda: breaker)
     monkeypatch.setattr(worker.db, "get_state", lambda: {"bank": 2137.12})
     monkeypatch.setattr(worker.db, "insert_decision", lambda data: data)
     return snap
@@ -52,9 +51,3 @@ def test_probability_below_53_is_blocked(monkeypatch):
     assert d["trade_executed"] is False
     assert d["no_trade_reason"] == "PROBABILITY_BELOW_53_PERCENT"
 
-
-def test_breaker_skips_otherwise_eligible_signal(monkeypatch):
-    d = worker.create_locked_decision(prep(monkeypatch, breaker=True))
-    assert d["trade_executed"] is False
-    assert d["breaker_applied"] is True
-    assert d["no_trade_reason"] == "BREAKER_SKIP_AFTER_3_LOSSES"

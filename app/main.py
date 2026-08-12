@@ -19,7 +19,7 @@ from .worker import bootstrap_rounds, loop, signal_cache, status as worker_statu
 
 _STOP: Optional[asyncio.Event] = None
 _TASK: Optional[asyncio.Task] = None
-_BUILD_REVISION = "fusion-222-v1.0.4-startup-hardening-v1366-only"
+_BUILD_REVISION = "fusion-222-v1.0.5-no-breaker-v1366-only"
 
 
 def _json_safe(value: Any) -> Any:
@@ -73,7 +73,7 @@ def root():
         "version": SETTINGS.version,
         "build_revision": _BUILD_REVISION,
         "mode": "PAPER",
-        "strategy": "EV>=2%, selected probability>=53%, payout ready, Shadow Recent, Quality PF>=0.85, Quality WR display-only, 3 losses -> skip next 3 eligible signals, fixed $22",
+        "strategy": "EV>=2%, selected probability>=53%, payout ready, Shadow Recent, Quality PF>=0.85, Quality WR display-only, fixed $22; circuit breaker disabled",
         "stake_mode": "fixed_22",
         "fixed_stake": SETTINGS.fixed_stake,
         "database_mode": "shared Fusion PostgreSQL; main history read-only; FUSION-222 writes only private fusion222_* tables",
@@ -300,8 +300,6 @@ def shadow_performance():
                 "quality_min_win_rate": SETTINGS.quality_min_win_rate,
                 "quality_win_rate_filter_enabled": SETTINGS.quality_win_rate_filter_enabled,
                 "quality_min_profit_factor": SETTINGS.quality_min_profit_factor,
-                "breaker_loss_trigger": SETTINGS.breaker_loss_trigger,
-                "breaker_skip_signals": SETTINGS.breaker_skip_signals,
             },
             "sources": result,
         }
