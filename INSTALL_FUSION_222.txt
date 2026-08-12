@@ -1,4 +1,4 @@
-FUSION-222 v1.0.2 — INSTALL (v1.3.6.6 RETRO ONLY)
+FUSION-222 v1.0.3 — INSTALL (v1.3.6.6 RETRO ONLY)
 ======================================================
 
 1. Create/update the Railway service `fusion-222` from this GitHub package.

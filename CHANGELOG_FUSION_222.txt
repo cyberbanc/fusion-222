@@ -1,4 +1,11 @@
 FUSION-222 CHANGELOG
+
+v1.0.3 — SQL/JSONB startup hotfix
+- Fixed psycopg2.sql.SQL.format() collision with literal JSONB DEFAULT '{}' values.
+- Escaped literal braces in CREATE TABLE templates for decisions and snapshots.
+- Keeps DB autodetect, v1.3.6.6-only retro scope, FIXED $22, and existing private table names unchanged.
+- Added regression test that runs init_db() SQL composition without a live PostgreSQL connection.
+
 ====================
 
 v1.0.2 — corrected retro scope

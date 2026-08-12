@@ -1,4 +1,4 @@
-FUSION-222 v1.0.2 — VALIDATION SNAPSHOT
+FUSION-222 v1.0.3 — VALIDATION SNAPSHOT
 ===========================================
 Source file supplied 2026-08-11:
 - m9_fusion_ev_history_1_3_6_6_from_500(1).csv
