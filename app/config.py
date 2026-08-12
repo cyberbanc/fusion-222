@@ -56,8 +56,8 @@ class Settings:
     retro_scope_version: str = os.getenv("RETRO_SCOPE_VERSION", "1.3.6.6")
 
     database_url: str = os.getenv("DATABASE_URL", "")
-    base_decisions_table: str = os.getenv("BASE_DECISIONS_TABLE", "paper_decisions")
-    base_rounds_table: str = os.getenv("BASE_ROUNDS_TABLE", "round_history")
+    base_decisions_table: str = os.getenv("BASE_DECISIONS_TABLE", "auto")
+    base_rounds_table: str = os.getenv("BASE_ROUNDS_TABLE", "auto")
     bot_decisions_table: str = os.getenv("BOT_DECISIONS_TABLE", "fusion222_v1366_decisions")
     bot_state_table: str = os.getenv("BOT_STATE_TABLE", "fusion222_v1366_state")
     bot_snapshots_table: str = os.getenv("BOT_SNAPSHOTS_TABLE", "fusion222_v1366_snapshots")

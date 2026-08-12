@@ -4,7 +4,7 @@ from app import db
 
 def test_private_write_tables_and_main_read_source():
     names = db.table_names()
-    assert names["base_decisions_read_only"] == "paper_decisions"
+    assert names["base_decisions_read_only"] in {"auto", "paper_decisions", "decisions", "fusion_decisions", "paper_history", "fusion_history"}
     assert names["decisions"] == "fusion222_v1366_decisions"
     assert names["state"] == "fusion222_v1366_state"
     assert names["snapshots"] == "fusion222_v1366_snapshots"

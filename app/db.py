@@ -5,7 +5,7 @@ import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterable
 
 import psycopg2
 from psycopg2 import sql
@@ -51,6 +51,109 @@ def _table_exists(cur, name: str) -> bool:
     return bool(cur.fetchone()[0])
 
 
+def _existing_tables(cur) -> set[str]:
+    cur.execute(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
+    )
+    return {str(r[0]) for r in cur.fetchall()}
+
+
+def _table_columns(cur) -> dict[str, set[str]]:
+    cur.execute(
+        "SELECT table_name,column_name FROM information_schema.columns WHERE table_schema='public'"
+    )
+    result: dict[str, set[str]] = {}
+    for table, column in cur.fetchall():
+        result.setdefault(str(table), set()).add(str(column))
+    return result
+
+
+def _choose_existing_table(
+    existing: set[str],
+    columns: dict[str, set[str]],
+    configured: str,
+    candidates: Iterable[str],
+    signature: set[str],
+    *,
+    exclude: set[str] | None = None,
+    min_signature_matches: int | None = None,
+) -> str | None:
+    """Resolve a legacy/main Fusion table without ever selecting FUSION-222 private tables.
+
+    The main Fusion bot historically auto-detected its table names. FUSION-222
+    must therefore do the same instead of assuming the physical name is
+    literally ``paper_decisions``.
+    """
+    exclude = set(exclude or set())
+    configured = str(configured or "").strip()
+    if configured and configured.lower() != "auto" and configured in existing and configured not in exclude:
+        return configured
+    for name in candidates:
+        if name in existing and name not in exclude:
+            return name
+
+    scored: list[tuple[int, int, str]] = []
+    for table, table_columns in columns.items():
+        if table in exclude or table.startswith("fusion222_"):
+            continue
+        score = len(signature & table_columns)
+        if score:
+            scored.append((score, len(table_columns), table))
+    scored.sort(reverse=True)
+    if scored:
+        threshold = min_signature_matches if min_signature_matches is not None else max(2, len(signature) // 2)
+        if scored[0][0] >= threshold:
+            return scored[0][2]
+    return None
+
+
+def _resolve_base_tables(cur) -> None:
+    global _BASE_DECISIONS_TABLE, _ROUNDS_TABLE
+    existing = _existing_tables(cur)
+    columns = _table_columns(cur)
+    private = {_DECISIONS_TABLE, _STATE_TABLE, _SNAPSHOTS_TABLE}
+
+    decision_signature = {
+        "betting_epoch", "signal", "selected_ev", "probability_up",
+        "probability_down", "strategy_version", "settled", "final_winner",
+    }
+    resolved_decisions = _choose_existing_table(
+        existing,
+        columns,
+        SETTINGS.base_decisions_table,
+        ("paper_decisions", "decisions", "fusion_decisions", "paper_history", "fusion_history"),
+        decision_signature,
+        exclude=private,
+        min_signature_matches=5,
+    )
+    if not resolved_decisions:
+        visible = ", ".join(sorted(existing)) or "<none>"
+        raise RuntimeError(
+            "Main Fusion decisions table could not be auto-detected. "
+            f"Configured BASE_DECISIONS_TABLE={SETTINGS.base_decisions_table!r}; "
+            f"public tables: {visible}"
+        )
+    _BASE_DECISIONS_TABLE = resolved_decisions
+
+    round_signature = {"epoch", "lock_price", "close_price", "oracle_called", "actual_winner"}
+    resolved_rounds = _choose_existing_table(
+        existing,
+        columns,
+        SETTINGS.base_rounds_table,
+        ("round_history", "rounds_history", "fusion_rounds"),
+        round_signature,
+        exclude=private | {_BASE_DECISIONS_TABLE},
+        min_signature_matches=3,
+    )
+    # Round history is safe to create if no legacy round table exists; the
+    # decisions history is not.
+    _ROUNDS_TABLE = resolved_rounds or (
+        SETTINGS.base_rounds_table
+        if str(SETTINGS.base_rounds_table or "").strip().lower() not in {"", "auto"}
+        else "round_history"
+    )
+
+
 def _add_columns(cur, table: str, specs: dict[str, str]) -> None:
     for name, ddl in specs.items():
         cur.execute(
@@ -67,8 +170,7 @@ def init_db() -> None:
     inserts into or rewrites the main paper_decisions table.
     """
     with _LOCK, conn() as c, c.cursor() as cur:
-        if not _table_exists(cur, _BASE_DECISIONS_TABLE):
-            raise RuntimeError(f"Base decisions table not found: {_BASE_DECISIONS_TABLE}")
+        _resolve_base_tables(cur)
 
         # Dedicated state: initialized from the historical counterfactual replay
         # exactly once, then continued by live FUSION-222 paper trades.

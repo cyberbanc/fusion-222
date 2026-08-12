@@ -1,16 +1,16 @@
-# FUSION-222 v1.0.1 — SAME Railway project / SAME Postgres as main fusion-ev
+# FUSION-222 v1.0.2 — SAME Railway project / SAME Postgres as main fusion-ev
 # Dashboard retro accounting is STRICTLY strategy_version=1.3.6.6 only.
 
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 
 SERVICE_NAME=FUSION-222
-MODEL_VERSION=FUSION-222-v1.0.1
+MODEL_VERSION=FUSION-222-v1.0.2
 RETRO_ANCHOR_VERSION=1.3.6.6
 RETRO_SCOPE_VERSION=1.3.6.6
 
-# Existing main Fusion tables (read-only history + shared rounds)
-BASE_DECISIONS_TABLE=paper_decisions
-BASE_ROUNDS_TABLE=round_history
+# Existing main Fusion tables (AUTO-DETECT; decisions remain read-only)
+BASE_DECISIONS_TABLE=auto
+BASE_ROUNDS_TABLE=auto
 
 # Corrected private FUSION-222 tables. Keep these names exactly to avoid
 # mixing with the earlier ALL_VERSIONS draft state.

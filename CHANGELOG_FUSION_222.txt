@@ -1,7 +1,7 @@
 FUSION-222 CHANGELOG
 ====================
 
-v1.0.1 — corrected retro scope
+v1.0.2 — corrected retro scope
 - Dashboard retro accounting now replays ONLY strategy_version=1.3.6.6.
 - ALL_VERSIONS is excluded from bank/PnL/PF/DD initialization.
 - Retro cutoff = latest settled 1.3.6.6 base decision at first boot.
@@ -11,3 +11,9 @@ v1.0.1 — corrected retro scope
 - Main fusion-ev paper_decisions remains read-only.
 - Corrected private tables are fusion222_v1366_decisions, fusion222_v1366_state, fusion222_v1366_snapshots.
 - Separate table names prevent accidental reuse of the earlier draft state that had ALL_VERSIONS retro accounting.
+
+HOTFIX v1.0.2
+- Fixed startup failure when the main Fusion DB physical history table is not literally named paper_decisions.
+- BASE_DECISIONS_TABLE=auto now uses the same legacy-compatible table discovery approach as the main Fusion bot.
+- Private fusion222_v1366_* tables are explicitly excluded from discovery.
+- Health/status report the actually resolved base table name.

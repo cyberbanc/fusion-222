@@ -15,13 +15,13 @@ Independent PAPER bot for PancakeSwap Prediction using the Fusion EV ensemble an
 
 FUSION-222 uses the **same PostgreSQL database as the main `fusion-ev` bot**.
 
-It reads the historical main Fusion decisions from `paper_decisions` and round history from `round_history`, but writes its own records only to:
+It auto-detects the historical main Fusion decisions table (`paper_decisions`, `decisions`, `fusion_decisions`, or a compatible legacy table) and the shared round-history table, but writes its own records only to:
 
 - `fusion222_v1366_decisions`
 - `fusion222_v1366_state`
 - `fusion222_v1366_snapshots`
 
-The main `paper_decisions` history is read-only for FUSION-222. The corrected v1.0.1 table names are intentionally different from the earlier draft so an accidentally initialized ALL_VERSIONS state cannot contaminate the corrected accounting.
+The resolved main Fusion decisions history is read-only for FUSION-222. The corrected v1.0.2 table names are intentionally different from the earlier draft so an accidentally initialized ALL_VERSIONS state cannot contaminate the corrected accounting.
 
 ## Retro initialization — v1.3.6.6 ONLY
 
