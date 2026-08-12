@@ -1,0 +1,120 @@
+<!--
+TILDA T123 — FUSION-222
+Default API: https://fusion-222.up.railway.app
+
+Main dashboard metrics = retro replay of strategy_version 1.3.6.6 ONLY under FUSION-222 + new live FUSION-222 paper trades.
+Timer anchor = first stored v1.3.6.6 decision.
+-->
+<div id="f222-app">
+<style>
+#f222-app{--bg:#071018;--card:#0d1922;--card2:#101e29;--border:rgba(255,255,255,.075);--text:#f7fafc;--muted:#8494a3;--green:#38d9a9;--red:#ff6464;--yellow:#f5c451;--blue:#67b7ff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--text);padding:24px;border-radius:28px;box-sizing:border-box}
+#f222-app *{box-sizing:border-box}.f222-shell{max-width:1450px;margin:0 auto}.f222-header{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:20px}.f222-brand{display:flex;gap:16px;align-items:center}.f222-logo{width:62px;height:62px;border-radius:19px;background:#162532;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:900;letter-spacing:-.04em}.f222-eyebrow{font-size:11px;letter-spacing:.15em;color:var(--muted)}#f222-app h1{margin:4px 0 0;font-size:29px;line-height:1.1}#f222-app h2{margin:3px 0 0;font-size:20px}.f222-subtitle{color:var(--muted);margin-top:7px;font-size:13px;line-height:1.5}.f222-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.f222-badge,.f222-connection,.f222-button{padding:10px 13px;border-radius:13px;background:#101d27;font-size:12px}.f222-badge{color:var(--yellow);font-weight:800}.f222-badge.green{color:var(--green)}.f222-connection-dot{width:8px;height:8px;display:inline-block;border-radius:50%;background:var(--yellow);margin-right:7px}.f222-button{color:#fff;border:0;cursor:pointer;text-decoration:none}.f222-button:hover{opacity:.85}.f222-alert{padding:14px;border-radius:15px;background:#35191c;border:1px solid rgba(255,100,100,.25);margin-bottom:16px;color:#ffc1c1}.f222-note{padding:13px 15px;border-radius:15px;background:#0d2029;border:1px solid rgba(103,183,255,.16);margin-bottom:16px;color:#acc7dc;font-size:12px;line-height:1.5}.f222-live-grid{display:grid;grid-template-columns:1.15fr 1fr 1fr 1fr;gap:14px}.f222-stats-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-top:14px}.f222-card,.f222-stat,.f222-panel{background:var(--card);border:1px solid var(--border);border-radius:22px}.f222-card{padding:20px}.f222-stat{padding:18px}.f222-panel{margin-top:16px;padding:20px}.f222-label{color:var(--muted);font-size:12px;margin-bottom:9px}.f222-signal{font-size:44px;font-weight:850;line-height:1;margin:13px 0 9px}.f222-signal.UP{color:var(--green)}.f222-signal.DOWN{color:var(--red)}.f222-signal.WAIT,.f222-signal.NO_TRADE{color:var(--yellow)}.f222-reason{min-height:36px;color:var(--muted);font-size:13px;line-height:1.45}.f222-bottom{display:flex;justify-content:space-between;gap:15px;margin-top:20px;padding-top:15px;border-top:1px solid var(--border)}.f222-bottom span{display:block;color:var(--muted);font-size:11px;margin-bottom:4px}.f222-bottom strong{font-size:14px}.f222-big{font-size:31px;font-weight:800}.f222-muted{color:var(--muted);font-size:12px}.f222-stat-value{font-size:27px;font-weight:800;margin:7px 0}.f222-up,.f222-positive{color:var(--green)!important}.f222-down,.f222-negative{color:var(--red)!important}.f222-yellow{color:var(--yellow)!important}.f222-blue{color:var(--blue)!important}.f222-prob-row{display:flex;justify-content:space-between;margin-top:18px;gap:12px}.f222-prob-box{flex:1;padding:12px;border-radius:14px;background:var(--card2);text-align:center}.f222-prob-box strong{font-size:23px;display:block}.f222-prob-box small{font-size:10px;color:var(--muted)}.f222-round{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-top:17px}.f222-info-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.f222-info{background:var(--card2);padding:12px;border-radius:14px}.f222-info b{display:block;font-size:15px;margin-top:4px}.f222-panel-head{display:flex;justify-content:space-between;align-items:flex-end;gap:15px;margin-bottom:15px;flex-wrap:wrap}.f222-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}.f222-table{width:100%;min-width:1150px;border-collapse:collapse}.f222-table th{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em;text-align:left;padding:11px 10px;white-space:nowrap}.f222-table td{padding:12px 10px;border-top:1px solid var(--border);font-size:12px;white-space:nowrap}.f222-pill{display:inline-block;padding:5px 8px;border-radius:9px;background:var(--card2);font-size:10px;font-weight:700}.f222-win{color:var(--green);font-weight:800}.f222-loss{color:var(--red);font-weight:800}.f222-empty{text-align:center;color:var(--muted);padding:22px}
+@media(max-width:1200px){.f222-stats-grid{grid-template-columns:repeat(3,1fr)}.f222-info-grid{grid-template-columns:repeat(3,1fr)}}@media(max-width:1050px){.f222-live-grid{grid-template-columns:1fr 1fr}}@media(max-width:650px){#f222-app{padding:13px;border-radius:18px}.f222-header{flex-direction:column;align-items:flex-start}.f222-live-grid,.f222-stats-grid,.f222-info-grid{grid-template-columns:1fr}#f222-app h1{font-size:23px}}
+</style>
+<div class="f222-shell">
+  <div class="f222-header">
+    <div class="f222-brand">
+      <div class="f222-logo">222</div>
+      <div>
+        <div class="f222-eyebrow">PANCAKESWAP PREDICTION • PAPER</div>
+        <h1>FUSION-222</h1>
+        <div class="f222-subtitle">EV ≥ 2% • Probability ≥ 53% • FIXED $22 • Shadow Recent • Quality PF ≥ 0.85 • Quality WR display-only • 3 LOSS → skip next 3 eligible signals</div>
+      </div>
+    </div>
+    <div class="f222-actions">
+      <div class="f222-badge">PAPER ONLY</div>
+      <div class="f222-badge green">v1.3.6.6 RETRO + LIVE</div>
+      <div class="f222-badge green" id="f222-uptime-badge">UPTIME —</div>
+      <div class="f222-connection"><span id="f222-dot" class="f222-connection-dot"></span><span id="f222-connection">Подключение…</span></div>
+      <button id="f222-refresh" class="f222-button" type="button">Обновить</button>
+      <a id="f222-csv-combined" class="f222-button" href="#" target="_blank">CSV COMBINED</a>
+      <a id="f222-csv-retro" class="f222-button" href="#" target="_blank">CSV RETRO</a>
+      <a id="f222-csv-live" class="f222-button" href="#" target="_blank">CSV LIVE</a>
+    </div>
+  </div>
+
+  <div class="f222-note"><b>Reporting:</b> банк/PnL/PF/DD пересчитаны <b>только по участку версии 1.3.6.6</b> по правилам FUSION-222 со стартовым банком $500, затем к ним добавляются новые сделки FUSION-222. Таймер начинается с первого сохранённого решения 1.3.6.6. Другие старые версии в статистику dashboard не входят.</div>
+  <div id="f222-error" class="f222-alert" hidden></div>
+
+  <div class="f222-live-grid">
+    <div class="f222-card">
+      <div class="f222-label">СИГНАЛ</div>
+      <div id="f222-signal" class="f222-signal WAIT">WAIT</div>
+      <div id="f222-reason" class="f222-reason">Ожидание текущего раунда</div>
+      <div class="f222-bottom"><div><span>Источник</span><strong id="f222-source">—</strong></div><div><span>Ставка</span><strong id="f222-stake">$22 FIXED</strong></div></div>
+    </div>
+
+    <div class="f222-card">
+      <div class="f222-label">ТЕКУЩИЙ РАУНД</div>
+      <div class="f222-round"><div><div id="f222-epoch" class="f222-big">—</div><div class="f222-muted">Epoch</div></div><div style="text-align:right"><div id="f222-countdown" class="f222-big">—:—</div><div class="f222-muted">до lock</div></div></div>
+      <div id="f222-action" class="f222-reason" style="margin-top:18px">Ожидание данных</div>
+    </div>
+
+    <div class="f222-card">
+      <div class="f222-label">EV / CONFIDENCE</div>
+      <div id="f222-ev" class="f222-big">—</div><div class="f222-muted">Selected EV • минимум 2%</div>
+      <div class="f222-prob-row"><div class="f222-prob-box"><strong id="f222-prob" class="f222-blue">—</strong><small>SELECTED P • минимум 53%</small></div></div>
+      <div class="f222-bottom"><div><span>Shadow</span><strong id="f222-shadow">—</strong></div><div><span>Quality PF</span><strong id="f222-quality">—</strong></div></div>
+    </div>
+
+    <div class="f222-card">
+      <div class="f222-label">CIRCUIT BREAKER</div>
+      <div id="f222-breaker" class="f222-big">—</div><div class="f222-muted">eligible signals remaining to skip</div>
+      <div class="f222-bottom"><div><span>LOSS counter</span><strong id="f222-breaker-loss">—</strong></div><div><span>Triggers</span><strong id="f222-breaker-triggers">—</strong></div></div>
+    </div>
+  </div>
+
+  <div class="f222-stats-grid">
+    <div class="f222-stat"><div class="f222-label">ВИРТУАЛЬНЫЙ БАНК</div><div id="f222-bank" class="f222-stat-value">$500,00</div><div class="f222-muted">Старт $500 • v1.3.6.6 retro + live</div></div>
+    <div class="f222-stat"><div class="f222-label">PNL</div><div id="f222-pnl" class="f222-stat-value">$0,00</div><div id="f222-wl" class="f222-muted">W 0 / L 0</div></div>
+    <div class="f222-stat"><div class="f222-label">WIN RATE</div><div id="f222-wr" class="f222-stat-value">0,00%</div><div id="f222-trades" class="f222-muted">Сделок: 0</div></div>
+    <div class="f222-stat"><div class="f222-label">PROFIT FACTOR</div><div id="f222-pf" class="f222-stat-value">—</div><div class="f222-muted">Pancake fee уже в net coeff</div></div>
+    <div class="f222-stat"><div class="f222-label">MAX DRAWDOWN</div><div id="f222-dd" class="f222-stat-value f222-negative">$0,00</div><div id="f222-loss-streak" class="f222-muted">Max LOSS: 0</div></div>
+    <div class="f222-stat"><div class="f222-label">ТАЙМЕР v1.3.6.6</div><div id="f222-uptime" class="f222-stat-value">—</div><div id="f222-start" class="f222-muted">Старт: —</div></div>
+  </div>
+
+  <div class="f222-panel">
+    <div class="f222-panel-head"><div><div class="f222-eyebrow">REPORTING BASE</div><h2>Retro / Live состояние</h2></div><div class="f222-muted">Срез фиксируется при первом запуске FUSION-222</div></div>
+    <div class="f222-info-grid">
+      <div class="f222-info"><span class="f222-muted">Retro v1.3.6.6 trades</span><b id="f222-retro-trades">—</b></div>
+      <div class="f222-info"><span class="f222-muted">Retro v1.3.6.6 PnL</span><b id="f222-retro-pnl">—</b></div>
+      <div class="f222-info"><span class="f222-muted">Retro v1.3.6.6 DD</span><b id="f222-retro-dd">—</b></div>
+      <div class="f222-info"><span class="f222-muted">Retro cutoff epoch</span><b id="f222-cutoff">—</b></div>
+      <div class="f222-info"><span class="f222-muted">Live decisions</span><b id="f222-live-count">—</b></div>
+    </div>
+  </div>
+
+  <div class="f222-panel">
+    <div class="f222-panel-head"><div><div class="f222-eyebrow">COMBINED TRADE HISTORY</div><h2>FUSION-222 — последние сделки</h2></div><div id="f222-history-count" class="f222-muted">—</div></div>
+    <div class="f222-table-wrap"><table class="f222-table"><thead><tr><th>Epoch</th><th>Origin</th><th>Version/source</th><th>Signal</th><th>EV</th><th>P</th><th>Stake</th><th>Actual coeff</th><th>Result</th><th>PnL</th><th>Bank</th></tr></thead><tbody id="f222-history"><tr><td colspan="11"><div class="f222-empty">Загрузка…</div></td></tr></tbody></table></div>
+  </div>
+</div>
+<script>
+(function(){
+const API_BASE="https://fusion-222.up.railway.app";
+const REFRESH_MS=4000;
+const $=id=>document.getElementById(id);
+let busy=false,startedAtMs=null,serverUptimeAtSync=0,localSyncMs=Date.now();
+function num(v,d=2){const n=Number(v);return Number.isFinite(n)?n.toFixed(d).replace(".",","):"—"}
+function money(v){const n=Number(v);if(!Number.isFinite(n))return"—";return(n<0?"-$":"$")+num(Math.abs(n),2)}
+function pct(v){const n=Number(v);return Number.isFinite(n)?num(n*100,2)+"%":"—"}
+function esc(v){return String(v??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;")}
+function uptime(s){s=Math.max(0,Math.floor(Number(s)||0));const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60),x=s%60;return d+"д "+String(h).padStart(2,"0")+":"+String(m).padStart(2,"0")+":"+String(x).padStart(2,"0")}
+function dateFmt(v){if(!v)return"—";const d=new Date(v);return Number.isNaN(d.getTime())?"—":d.toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"})}
+async function api(path){const c=new AbortController();const t=setTimeout(()=>c.abort(),12000);try{const r=await fetch(API_BASE+path,{cache:"no-store",signal:c.signal});if(!r.ok)throw new Error("HTTP "+r.status);return await r.json()}finally{clearTimeout(t)}}
+function conn(ok,text){$("f222-connection").textContent=text;$("f222-dot").style.background=ok?"#38d9a9":"#ff6464"}
+function err(msg){const b=$("f222-error");if(!msg){b.hidden=true;return}b.hidden=false;b.textContent="Ошибка: "+msg}
+function reason(r){const m={PAYOUT_BUCKET_NOT_READY:"Payout bucket не готов",EV_BELOW_2_PERCENT:"EV ниже 2%",PROBABILITY_BELOW_53_PERCENT:"Probability ниже 53%",SHADOW_RECENT_PNL_DEGRADED:"Recent Shadow деградировал",QUALITY_PROFIT_FACTOR_BELOW_MINIMUM:"Quality PF ниже 0.85",BREAKER_SKIP_AFTER_3_LOSSES:"Circuit breaker: пропуск eligible signal"};return m[r]||r||"Все фильтры пройдены"}
+function selectedP(s){const side=String(s.signal||"").toUpperCase();return side==="UP"?s.probability_up:side==="DOWN"?s.probability_down:null}
+function actualCoeff(x){const side=String(x.signal||"").toUpperCase();return side==="UP"?x.final_coeff_up:side==="DOWN"?x.final_coeff_down:null}
+function renderSignal(s){const locked=!!s.decision_locked,exec=s.trade_executed===true,side=String(s.signal||"").toUpperCase(),disp=locked?(exec?side:"NO_TRADE"):"WAIT";const e=$("f222-signal");e.textContent=disp;e.className="f222-signal "+disp;$("f222-source").textContent=s.source_key||"—";$("f222-stake").textContent=exec?money(s.stake)+" FIXED":"$0 • NO TRADE";$("f222-reason").textContent=!locked?"Ожидание T−40 и фиксации решения":exec?"TRADE • "+side+" • FIXED $22":"NO TRADE • "+reason(s.no_trade_reason);const ev=Number(s.selected_ev);$("f222-ev").textContent=Number.isFinite(ev)?pct(ev):"—";$("f222-ev").className="f222-big "+(ev>=.02?"f222-positive":"f222-yellow");const p=selectedP(s);$("f222-prob").textContent=pct(p);const st=s.shadow_stats_json||s.features_json?.shadow_stats||{};$("f222-shadow").textContent=(s.shadow_allowed??s.features_json?.shadow_allowed)===false?"BLOCKED":"OK";const qpf=st.quality?.profit_factor;$("f222-quality").textContent=qpf==null?"—":num(qpf,3)}
+function renderRound(s,status){const t=status.worker?.last_tick||s.worker_tick||{};$("f222-epoch").textContent=s.betting_epoch??t.betting_epoch??"—";const sec=Number(s.seconds_to_lock??t.seconds_to_lock);if(Number.isFinite(sec)){const x=Math.max(0,Math.floor(sec));$("f222-countdown").textContent=Math.floor(x/60)+":"+String(x%60).padStart(2,"0")}else $("f222-countdown").textContent="—:—";$("f222-action").textContent=s.decision_locked?(s.trade_executed?"Решение зафиксировано. PAPER $22.":reason(s.no_trade_reason)):"Сбор live-данных до окна решения"}
+function syncClock(status){const start=status.version_started_at||status.paper_state?.strategy_started_at;if(start)startedAtMs=new Date(start).getTime();serverUptimeAtSync=Number(status.uptime_seconds)||0;localSyncMs=Date.now();$("f222-start").textContent="Старт: "+dateFmt(start);renderClock()}
+function renderClock(){let s=serverUptimeAtSync+Math.floor((Date.now()-localSyncMs)/1000);if(Number.isFinite(startedAtMs))s=Math.max(s,Math.floor((Date.now()-startedAtMs)/1000));const x=uptime(s);$("f222-uptime").textContent=x;$("f222-uptime-badge").textContent="UPTIME "+x}
+function renderMetrics(status){const s=status.paper_state||{};$("f222-bank").textContent=money(s.bank);const pnl=Number(s.pnl);const pe=$("f222-pnl");pe.textContent=money(pnl);pe.className="f222-stat-value "+(pnl>0?"f222-positive":pnl<0?"f222-negative":"");$("f222-wr").textContent=pct(s.win_rate);$("f222-trades").textContent="Сделок: "+(s.trades_count??0);$("f222-wl").textContent="W "+(s.wins??0)+" / L "+(s.losses??0);$("f222-pf").textContent=s.profit_factor==null?"—":num(s.profit_factor,3);const dd=Math.abs(Number(s.max_drawdown||0));$("f222-dd").textContent=dd?"-$"+num(dd,2):"$0,00";$("f222-loss-streak").textContent="Max LOSS: "+(s.max_loss_streak??0)+" • Current: "+(s.current_loss_streak??0);$("f222-breaker").textContent=String(s.breaker_signals_remaining??0);$("f222-breaker-loss").textContent=String(s.breaker_loss_count??0)+" / 3";$("f222-breaker-triggers").textContent=String(s.breaker_trigger_count??0);$("f222-retro-trades").textContent=String(s.retro_trades_count??status.retro_trade_count??0);$("f222-retro-pnl").textContent=money(s.retro_pnl);$("f222-retro-dd").textContent=money(-Math.abs(Number(s.retro_max_drawdown||0)));$("f222-cutoff").textContent=String(s.retro_cutoff_epoch??"—");$("f222-live-count").textContent=String(status.live_decision_count??0);syncClock(status)}
+function renderHistory(data){const rows=data.history||[];$("f222-history-count").textContent="Всего combined trades: "+(data.count??rows.length);const b=$("f222-history");if(!rows.length){b.innerHTML='<tr><td colspan="11"><div class="f222-empty">История пока пуста</div></td></tr>';return}b.innerHTML=rows.map(x=>{const side=String(x.signal||"").toUpperCase(),out=String(x.outcome||"").toUpperCase(),origin=String(x.origin||"LIVE").toUpperCase(),p=Number(x.projected_pnl??x.pnl),bank=x.version_bank_after??x.bank_after;const ver=x.retro_source_version||x.strategy_version||x.source_key||"—";return '<tr><td>'+esc(x.betting_epoch)+'</td><td><span class="f222-pill">'+esc(origin)+'</span></td><td>'+esc(ver)+'</td><td class="'+(side==='UP'?'f222-up':side==='DOWN'?'f222-down':'')+'"><strong>'+esc(side)+'</strong></td><td>'+pct(x.selected_ev)+'</td><td>'+pct(selectedP(x))+'</td><td>'+money(x.projected_stake??x.stake)+'</td><td>'+num(actualCoeff(x),3)+'</td><td class="'+(out==='WIN'?'f222-win':out==='LOSS'?'f222-loss':'')+'">'+esc(out)+'</td><td class="'+(p>0?'f222-positive':p<0?'f222-negative':'')+'">'+money(p)+'</td><td>'+money(bank)+'</td></tr>'}).join("")}
+async function load(){if(busy)return;busy=true;$("f222-refresh").disabled=true;conn(false,"Обновление…");err(null);try{const[s,status,h]=await Promise.all([api('/signal'),api('/status?history=none'),api('/history/combined?limit=100')]);renderSignal(s);renderRound(s,status);renderMetrics(status);renderHistory(h);$("f222-csv-combined").href=API_BASE+'/history/export-combined.csv';$("f222-csv-retro").href=API_BASE+'/history/export-retro.csv';$("f222-csv-live").href=API_BASE+'/history/export-live.csv';conn(true,'Bot Online • FUSION-222 • FIX $22')}catch(e){conn(false,'Нет подключения');err(e.message||'Не удалось получить данные')}finally{busy=false;$("f222-refresh").disabled=false}}
+$("f222-refresh").addEventListener('click',load);load();setInterval(load,REFRESH_MS);setInterval(renderClock,1000);
+})();
+</script>
+</div>

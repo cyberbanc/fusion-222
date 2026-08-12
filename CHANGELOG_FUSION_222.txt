@@ -1,0 +1,13 @@
+FUSION-222 CHANGELOG
+====================
+
+v1.0.1 — corrected retro scope
+- Dashboard retro accounting now replays ONLY strategy_version=1.3.6.6.
+- ALL_VERSIONS is excluded from bank/PnL/PF/DD initialization.
+- Retro cutoff = latest settled 1.3.6.6 base decision at first boot.
+- Timer anchor = first stored 1.3.6.6 decision.
+- Fixed stake remains $22.
+- Strategy remains EV>=2%, selected probability>=53%, payout-ready, Shadow Recent, Quality PF>=0.85, Quality WR display-only, breaker 3 losses -> skip 3 eligible signals.
+- Main fusion-ev paper_decisions remains read-only.
+- Corrected private tables are fusion222_v1366_decisions, fusion222_v1366_state, fusion222_v1366_snapshots.
+- Separate table names prevent accidental reuse of the earlier draft state that had ALL_VERSIONS retro accounting.
