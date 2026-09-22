@@ -23,6 +23,9 @@ _STATE_TABLE = SETTINGS.bot_state_table
 _ROUNDS_TABLE = SETTINGS.base_rounds_table
 _SNAPSHOTS_TABLE = SETTINGS.bot_snapshots_table
 _BASE_DECISIONS_TABLE = SETTINGS.base_decisions_table
+_REFERENCE_DECISIONS_TABLE = SETTINGS.reference_decisions_table
+_TRANSACTIONS_TABLE = SETTINGS.transactions_table
+_WALLET_SNAPSHOTS_TABLE = SETTINGS.wallet_snapshots_table
 
 
 def enabled() -> bool:
@@ -132,10 +135,16 @@ def _choose_existing_table(
 
 
 def _resolve_base_tables(cur) -> None:
-    global _BASE_DECISIONS_TABLE, _ROUNDS_TABLE
+    global _BASE_DECISIONS_TABLE, _ROUNDS_TABLE, _REFERENCE_DECISIONS_TABLE
     existing = _existing_tables(cur)
     columns = _table_columns(cur)
-    private = {_DECISIONS_TABLE, _STATE_TABLE, _SNAPSHOTS_TABLE}
+    private = {
+        _DECISIONS_TABLE,
+        _STATE_TABLE,
+        _SNAPSHOTS_TABLE,
+        _TRANSACTIONS_TABLE,
+        _WALLET_SNAPSHOTS_TABLE,
+    }
 
     decision_signature = {
         "betting_epoch", "signal", "selected_ev", "probability_up",
@@ -158,6 +167,20 @@ def _resolve_base_tables(cur) -> None:
             f"public tables: {visible}"
         )
     _BASE_DECISIONS_TABLE = resolved_decisions
+
+    reference = str(SETTINGS.reference_decisions_table or "").strip()
+    if reference:
+        if reference not in existing:
+            raise RuntimeError(
+                f"Reference paper decisions table {reference!r} does not exist; "
+                "the real bot will not run with a different signal history"
+            )
+        required = {"betting_epoch", "signal", "settled", "source_key", "shadow_pnl"}
+        if not required.issubset(columns.get(reference, set())):
+            raise RuntimeError(f"Reference paper decisions table {reference!r} has an incompatible schema")
+        _REFERENCE_DECISIONS_TABLE = reference
+    else:
+        _REFERENCE_DECISIONS_TABLE = _DECISIONS_TABLE
 
     round_signature = {"epoch", "lock_price", "close_price", "oracle_called", "actual_winner"}
     resolved_rounds = _choose_existing_table(
@@ -285,6 +308,12 @@ def init_db() -> None:
             ).format(_ident(_STATE_TABLE)),
             (SETTINGS.start_bank, SETTINGS.start_bank, SETTINGS.start_bank, SETTINGS.start_bank),
         )
+        if SETTINGS.execution_mode == "REAL":
+            cur.execute(
+                sql.SQL(
+                    "UPDATE {} SET live_started_at=COALESCE(live_started_at,NOW()),updated_at=NOW() WHERE id=1"
+                ).format(_ident(_STATE_TABLE))
+            )
 
         # Dedicated FUSION-222 decisions. Same rich shape as the main bot so
         # existing dashboard/reporting patterns remain easy to inspect.
@@ -346,7 +375,22 @@ def init_db() -> None:
                     stake_mode TEXT,
                     stake_tier TEXT,
                     breaker_applied BOOLEAN NOT NULL DEFAULT FALSE,
-                    origin TEXT NOT NULL DEFAULT 'LIVE'
+                    origin TEXT NOT NULL DEFAULT 'LIVE',
+                    execution_requested BOOLEAN NOT NULL DEFAULT FALSE,
+                    execution_status TEXT NOT NULL DEFAULT 'SKIPPED',
+                    wallet_address TEXT,
+                    tx_hash TEXT,
+                    tx_nonce BIGINT,
+                    stake_bnb DOUBLE PRECISION,
+                    bnb_usd_price DOUBLE PRECISION,
+                    bet_gas_fee_bnb DOUBLE PRECISION,
+                    claim_tx_hash TEXT,
+                    claim_gas_fee_bnb DOUBLE PRECISION,
+                    actual_payout_bnb DOUBLE PRECISION,
+                    actual_pnl_bnb DOUBLE PRECISION,
+                    actual_pnl_usd DOUBLE PRECISION,
+                    reconciliation_status TEXT,
+                    execution_error TEXT
                 )
                 """
             ).format(_ident(_DECISIONS_TABLE))
@@ -409,6 +453,21 @@ def init_db() -> None:
                 "stake_tier": "TEXT",
                 "breaker_applied": "BOOLEAN NOT NULL DEFAULT FALSE",
                 "origin": "TEXT NOT NULL DEFAULT 'LIVE'",
+                "execution_requested": "BOOLEAN NOT NULL DEFAULT FALSE",
+                "execution_status": "TEXT NOT NULL DEFAULT 'SKIPPED'",
+                "wallet_address": "TEXT",
+                "tx_hash": "TEXT",
+                "tx_nonce": "BIGINT",
+                "stake_bnb": "DOUBLE PRECISION",
+                "bnb_usd_price": "DOUBLE PRECISION",
+                "bet_gas_fee_bnb": "DOUBLE PRECISION",
+                "claim_tx_hash": "TEXT",
+                "claim_gas_fee_bnb": "DOUBLE PRECISION",
+                "actual_payout_bnb": "DOUBLE PRECISION",
+                "actual_pnl_bnb": "DOUBLE PRECISION",
+                "actual_pnl_usd": "DOUBLE PRECISION",
+                "reconciliation_status": "TEXT",
+                "execution_error": "TEXT",
             },
         )
         cur.execute(
@@ -466,6 +525,49 @@ def init_db() -> None:
                 )
                 """
             ).format(_ident(_SNAPSHOTS_TABLE))
+        )
+
+        cur.execute(
+            sql.SQL(
+                """
+                CREATE TABLE IF NOT EXISTS {} (
+                    id BIGSERIAL PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    betting_epoch BIGINT,
+                    tx_hash TEXT NOT NULL UNIQUE,
+                    tx_status TEXT NOT NULL,
+                    wallet_address TEXT NOT NULL,
+                    amount_bnb DOUBLE PRECISION,
+                    gas_fee_bnb DOUBLE PRECISION,
+                    balance_before_bnb DOUBLE PRECISION,
+                    balance_after_bnb DOUBLE PRECISION,
+                    bnb_usd_price DOUBLE PRECISION,
+                    metadata_json JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                    confirmed_at TIMESTAMPTZ,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            ).format(_ident(_TRANSACTIONS_TABLE))
+        )
+        cur.execute(
+            sql.SQL(
+                """
+                CREATE TABLE IF NOT EXISTS {} (
+                    id BIGSERIAL PRIMARY KEY,
+                    wallet_address TEXT NOT NULL,
+                    block_number BIGINT NOT NULL,
+                    balance_bnb DOUBLE PRECISION NOT NULL,
+                    bnb_usd_price DOUBLE PRECISION NOT NULL,
+                    balance_usd DOUBLE PRECISION NOT NULL,
+                    delta_bnb DOUBLE PRECISION,
+                    source TEXT NOT NULL DEFAULT 'POLL',
+                    details_json JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE(wallet_address,block_number,source)
+                )
+                """
+            ).format(_ident(_WALLET_SNAPSHOTS_TABLE))
         )
         c.commit()
 
@@ -787,6 +889,19 @@ def get_decision(betting_epoch: int) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def get_reference_decision(betting_epoch: int) -> dict[str, Any] | None:
+    """Read the immutable paper-bot decision used as the live execution source."""
+    with conn() as c, c.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            sql.SQL("SELECT * FROM {} WHERE betting_epoch=%s LIMIT 1").format(
+                _ident(_REFERENCE_DECISIONS_TABLE)
+            ),
+            (int(betting_epoch),),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
 def insert_decision(data: dict[str, Any]) -> dict[str, Any]:
     columns = [
         "betting_epoch", "live_epoch", "locked_at_chain_timestamp", "locked_at_seconds_to_lock",
@@ -796,7 +911,8 @@ def insert_decision(data: dict[str, Any]) -> dict[str, Any]:
         "raw_expected_coeff_down", "payout_correction_up", "payout_correction_down", "strategy_version",
         "payout_bucket_up", "payout_bucket_down", "trade_executed", "no_trade_reason", "source_key",
         "selection_reason", "shadow_allowed", "shadow_reason", "shadow_stats_json", "stake_mode",
-        "stake_tier", "breaker_applied", "origin",
+        "stake_tier", "breaker_applied", "origin", "execution_requested", "execution_status",
+        "wallet_address", "stake_bnb", "bnb_usd_price", "reconciliation_status",
     ]
     json_cols = {"components_json", "weights_json", "features_json", "snapshot_json", "shadow_stats_json"}
     values = []
@@ -819,6 +935,243 @@ def insert_decision(data: dict[str, Any]) -> dict[str, Any]:
     return dict(row) if row else (get_decision(int(data["betting_epoch"])) or {})
 
 
+_EXECUTION_FIELDS = {
+    "execution_requested",
+    "execution_status",
+    "wallet_address",
+    "tx_hash",
+    "tx_nonce",
+    "stake_bnb",
+    "bnb_usd_price",
+    "bet_gas_fee_bnb",
+    "claim_tx_hash",
+    "claim_gas_fee_bnb",
+    "actual_payout_bnb",
+    "actual_pnl_bnb",
+    "actual_pnl_usd",
+    "reconciliation_status",
+    "execution_error",
+    "trade_executed",
+    "no_trade_reason",
+}
+
+
+def update_execution(epoch: int, **fields: Any) -> dict[str, Any]:
+    values = {key: value for key, value in fields.items() if key in _EXECUTION_FIELDS}
+    if not values:
+        return get_decision(epoch) or {}
+    assignments = [
+        sql.SQL("{}={}").format(_ident(key), sql.Placeholder()) for key in values
+    ]
+    with conn() as c, c.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            sql.SQL("UPDATE {} SET {},updated_at=NOW() WHERE betting_epoch=%s RETURNING *").format(
+                _ident(_DECISIONS_TABLE), sql.SQL(",").join(assignments)
+            ),
+            (*values.values(), int(epoch)),
+        )
+        row = cur.fetchone()
+        c.commit()
+        return dict(row) if row else {}
+
+
+def upsert_transaction(data: dict[str, Any]) -> dict[str, Any]:
+    columns = [
+        "event_type",
+        "betting_epoch",
+        "tx_hash",
+        "tx_status",
+        "wallet_address",
+        "amount_bnb",
+        "gas_fee_bnb",
+        "balance_before_bnb",
+        "balance_after_bnb",
+        "bnb_usd_price",
+        "metadata_json",
+    ]
+    values = [Json(data.get(c) or {}) if c == "metadata_json" else data.get(c) for c in columns]
+    with conn() as c, c.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            sql.SQL(
+                """
+                INSERT INTO {} ({}) VALUES ({})
+                ON CONFLICT(tx_hash) DO UPDATE SET
+                    tx_status=EXCLUDED.tx_status,
+                    amount_bnb=COALESCE(EXCLUDED.amount_bnb,{}.amount_bnb),
+                    gas_fee_bnb=COALESCE(EXCLUDED.gas_fee_bnb,{}.gas_fee_bnb),
+                    balance_before_bnb=COALESCE(EXCLUDED.balance_before_bnb,{}.balance_before_bnb),
+                    balance_after_bnb=COALESCE(EXCLUDED.balance_after_bnb,{}.balance_after_bnb),
+                    bnb_usd_price=COALESCE(EXCLUDED.bnb_usd_price,{}.bnb_usd_price),
+                    metadata_json={}.metadata_json || EXCLUDED.metadata_json,
+                    confirmed_at=CASE WHEN EXCLUDED.tx_status='CONFIRMED' THEN NOW() ELSE {}.confirmed_at END,
+                    updated_at=NOW()
+                RETURNING *
+                """
+            ).format(
+                _ident(_TRANSACTIONS_TABLE),
+                sql.SQL(",").join(map(sql.Identifier, columns)),
+                sql.SQL(",").join(sql.Placeholder() for _ in columns),
+                *([_ident(_TRANSACTIONS_TABLE)] * 7),
+            ),
+            values,
+        )
+        row = cur.fetchone()
+        c.commit()
+        return dict(row) if row else {}
+
+
+def transactions(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), SETTINGS.history_api_max_limit))
+    with conn() as c, c.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            sql.SQL("SELECT * FROM {} ORDER BY id DESC LIMIT %s OFFSET %s").format(
+                _ident(_TRANSACTIONS_TABLE)
+            ),
+            (safe_limit, max(0, int(offset))),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def get_transaction(tx_hash: str) -> dict[str, Any] | None:
+    with conn() as c, c.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            sql.SQL("SELECT * FROM {} WHERE tx_hash=%s LIMIT 1").format(
+                _ident(_TRANSACTIONS_TABLE)
+            ),
+            (str(tx_hash),),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def transaction_count() -> int:
+    with conn() as c, c.cursor() as cur:
+        cur.execute(sql.SQL("SELECT COUNT(*) FROM {}").format(_ident(_TRANSACTIONS_TABLE)))
+        return int(_first_scalar(cur.fetchone(), default=0) or 0)
+
+
+def latest_wallet_snapshot() -> dict[str, Any] | None:
+    with conn() as c, c.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            sql.SQL("SELECT * FROM {} ORDER BY id DESC LIMIT 1").format(
+                _ident(_WALLET_SNAPSHOTS_TABLE)
+            )
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def actual_trade_metrics() -> dict[str, Any]:
+    with conn() as c, c.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            sql.SQL(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE COALESCE(execution_requested,FALSE)=TRUE) AS requested_count,
+                    COUNT(*) FILTER (WHERE COALESCE(trade_executed,FALSE)=TRUE) AS executed_count,
+                    COUNT(*) FILTER (WHERE COALESCE(trade_executed,FALSE)=TRUE AND COALESCE(settled,FALSE)=TRUE) AS settled_count,
+                    COUNT(*) FILTER (WHERE outcome='WIN' AND COALESCE(trade_executed,FALSE)=TRUE) AS wins,
+                    COUNT(*) FILTER (WHERE outcome='LOSS' AND COALESCE(trade_executed,FALSE)=TRUE) AS losses,
+                    COALESCE(SUM(actual_pnl_bnb),0) AS actual_pnl_bnb,
+                    COALESCE(SUM(actual_pnl_usd),0) AS actual_pnl_usd,
+                    COALESCE(SUM(bet_gas_fee_bnb),0) AS bet_gas_bnb,
+                    COALESCE(SUM(claim_gas_fee_bnb),0) AS claim_gas_bnb
+                FROM {}
+                """
+            ).format(_ident(_DECISIONS_TABLE))
+        )
+        row = cur.fetchone()
+        result = dict(row) if row else {}
+        wins = int(result.get("wins") or 0)
+        losses = int(result.get("losses") or 0)
+        result["win_rate"] = wins / (wins + losses) if wins + losses else 0.0
+        return result
+
+
+def wallet_summary() -> dict[str, Any]:
+    with conn() as c, c.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            sql.SQL(
+                """
+                WITH first_row AS (SELECT * FROM {} ORDER BY id ASC LIMIT 1),
+                     last_row AS (SELECT * FROM {} ORDER BY id DESC LIMIT 1)
+                SELECT
+                    f.balance_bnb AS start_balance_bnb,
+                    f.balance_usd AS start_balance_usd,
+                    f.created_at AS started_at,
+                    l.balance_bnb AS current_balance_bnb,
+                    l.balance_usd AS current_balance_usd,
+                    l.bnb_usd_price AS current_bnb_usd_price,
+                    l.created_at AS last_sync_at
+                FROM first_row f CROSS JOIN last_row l
+                """
+            ).format(_ident(_WALLET_SNAPSHOTS_TABLE), _ident(_WALLET_SNAPSHOTS_TABLE))
+        )
+        row = cur.fetchone()
+        result = dict(row) if row else {}
+        if result:
+            cur.execute(
+                sql.SQL(
+                    """
+                    SELECT COALESCE(SUM(
+                        CASE
+                            WHEN event_type='BET' AND tx_status='CONFIRMED'
+                                THEN -COALESCE(amount_bnb,0)-COALESCE(gas_fee_bnb,0)
+                            WHEN event_type='CLAIM' AND tx_status='CONFIRMED'
+                                THEN COALESCE(amount_bnb,0)-COALESCE(gas_fee_bnb,0)
+                            ELSE 0
+                        END
+                    ),0) AS known_bot_change_bnb
+                    FROM {}
+                    """
+                ).format(_ident(_TRANSACTIONS_TABLE))
+            )
+            known = float(_first_scalar(cur.fetchone(), key="known_bot_change_bnb", default=0.0) or 0.0)
+            result["balance_change_bnb"] = float(result.get("current_balance_bnb") or 0) - float(
+                result.get("start_balance_bnb") or 0
+            )
+            result["balance_change_usd"] = float(result.get("current_balance_usd") or 0) - float(
+                result.get("start_balance_usd") or 0
+            )
+            result["known_bot_change_bnb"] = known
+            result["external_or_unreconciled_bnb"] = result["balance_change_bnb"] - known
+        return result
+
+
+def save_wallet_snapshot(data: dict[str, Any]) -> dict[str, Any]:
+    previous = latest_wallet_snapshot()
+    balance = float(data["balance_bnb"])
+    delta = balance - float(previous.get("balance_bnb") or 0.0) if previous else 0.0
+    with conn() as c, c.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            sql.SQL(
+                """
+                INSERT INTO {}(wallet_address,block_number,balance_bnb,bnb_usd_price,balance_usd,
+                    delta_bnb,source,details_json)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT(wallet_address,block_number,source) DO UPDATE SET
+                    balance_bnb=EXCLUDED.balance_bnb,bnb_usd_price=EXCLUDED.bnb_usd_price,
+                    balance_usd=EXCLUDED.balance_usd,delta_bnb=EXCLUDED.delta_bnb,
+                    details_json=EXCLUDED.details_json
+                RETURNING *
+                """
+            ).format(_ident(_WALLET_SNAPSHOTS_TABLE)),
+            (
+                data["wallet_address"],
+                int(data["block_number"]),
+                balance,
+                float(data["bnb_usd_price"]),
+                float(data["balance_usd"]),
+                delta,
+                str(data.get("source") or "POLL"),
+                Json(data.get("details_json") or {}),
+            ),
+        )
+        row = cur.fetchone()
+        c.commit()
+        return dict(row) if row else (latest_wallet_snapshot() or {})
+
+
 def unsettled_decisions(limit: int = 100) -> list[dict[str, Any]]:
     with conn() as c, c.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
@@ -826,6 +1179,23 @@ def unsettled_decisions(limit: int = 100) -> list[dict[str, Any]]:
             (int(limit),),
         )
         return [dict(r) for r in cur.fetchall()]
+
+
+def actual_reconciliation_candidates(limit: int = 50) -> list[dict[str, Any]]:
+    with conn() as c, c.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            sql.SQL(
+                """
+                SELECT * FROM {}
+                WHERE COALESCE(settled,FALSE)=TRUE
+                  AND COALESCE(trade_executed,FALSE)=TRUE
+                  AND actual_pnl_bnb IS NULL
+                ORDER BY betting_epoch ASC LIMIT %s
+                """
+            ).format(_ident(_DECISIONS_TABLE)),
+            (max(1, int(limit)),),
+        )
+        return [dict(row) for row in cur.fetchall()]
 
 
 def settle_decision_atomic(
@@ -1050,6 +1420,8 @@ def combined_trade_count() -> int:
 
 
 def _source_cutoff() -> int:
+    if SETTINGS.base_history_cutoff_epoch > 0:
+        return int(SETTINGS.base_history_cutoff_epoch)
     state = get_state()
     return int(state.get("retro_cutoff_epoch") or 0)
 
@@ -1076,7 +1448,7 @@ def shadow_rows(source_key: str, signal: str | None, lookback: int) -> list[dict
                 ) q
                 WHERE {} ORDER BY betting_epoch DESC LIMIT %s
                 """
-            ).format(_ident(_BASE_DECISIONS_TABLE), _ident(_DECISIONS_TABLE), sql.SQL(where)),
+            ).format(_ident(_BASE_DECISIONS_TABLE), _ident(_REFERENCE_DECISIONS_TABLE), sql.SQL(where)),
             (cutoff, *params, int(lookback)),
         )
         return [dict(r) for r in cur.fetchall()]
@@ -1104,7 +1476,7 @@ def payout_ratios(side: str, bucket: str, lookback: int) -> list[float]:
                 """
             ).format(
                 final=_ident(final_col), raw=_ident(raw_col), bucket=_ident(bucket_col),
-                base=_ident(_BASE_DECISIONS_TABLE), bot=_ident(_DECISIONS_TABLE),
+                base=_ident(_BASE_DECISIONS_TABLE), bot=_ident(_REFERENCE_DECISIONS_TABLE),
             ),
             (cutoff, bucket, int(lookback)),
         )
@@ -1144,8 +1516,11 @@ def state_metrics() -> dict[str, Any]:
 def table_names() -> dict[str, str]:
     return {
         "base_decisions_read_only": _BASE_DECISIONS_TABLE,
+        "paper_reference_read_only": _REFERENCE_DECISIONS_TABLE,
         "decisions": _DECISIONS_TABLE,
         "state": _STATE_TABLE,
         "rounds_shared": _ROUNDS_TABLE,
         "snapshots": _SNAPSHOTS_TABLE,
+        "transactions": _TRANSACTIONS_TABLE,
+        "wallet_snapshots": _WALLET_SNAPSHOTS_TABLE,
     }

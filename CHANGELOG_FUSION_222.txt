@@ -1,6 +1,16 @@
 FUSION-222 CHANGELOG
 ====================
 
+REAL v1.0.0 — ISOLATED LIVE EXECUTION
+- New `live-real` branch; existing paper service remains on `main` unchanged.
+- Same v1.0.5 NO-BREAKER signal rules and fixed $22 stake.
+- Real BNB betBull/betBear execution with wallet/key address verification.
+- Idempotency through persisted signed tx hash and Pancake ledger checks.
+- Automatic claims and actual bet/claim/gas reconciliation.
+- Separate fusion222_real_* decisions, state, snapshots, transactions and wallet history.
+- Reads current paper decisions only as the rolling Shadow/Quality reference.
+- Standalone/Tilda real dashboard and real CSV exports.
+
 v1.0.5 — NO BREAKER
 - Removed 3 LOSS -> skip next 3 eligible signals from forward trading.
 - Removed breaker from retro replay.

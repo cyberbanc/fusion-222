@@ -56,6 +56,7 @@ try:
 except ModuleNotFoundError:
     web3 = types.ModuleType("web3")
     middleware = types.ModuleType("web3.middleware")
+    exceptions = types.ModuleType("web3.exceptions")
 
     class _MiddlewareOnion:
         def inject(self, middleware_item, layer=0):
@@ -73,10 +74,41 @@ except ModuleNotFoundError:
         def to_checksum_address(value):
             return value
 
+        @staticmethod
+        def from_wei(value, unit):
+            return value / 10**18
+
+        @staticmethod
+        def to_wei(value, unit):
+            return int(float(value) * 10**18)
+
     class ExtraDataToPOAMiddleware:
+        pass
+
+    class TimeExhausted(Exception):
+        pass
+
+    class TransactionNotFound(Exception):
         pass
 
     web3.Web3 = Web3
     middleware.ExtraDataToPOAMiddleware = ExtraDataToPOAMiddleware
+    exceptions.TimeExhausted = TimeExhausted
+    exceptions.TransactionNotFound = TransactionNotFound
     sys.modules["web3"] = web3
     sys.modules["web3.middleware"] = middleware
+    sys.modules["web3.exceptions"] = exceptions
+
+
+try:
+    import eth_account  # noqa: F401
+except ModuleNotFoundError:
+    eth_account = types.ModuleType("eth_account")
+
+    class Account:
+        @staticmethod
+        def from_key(value):
+            raise ValueError("eth_account test stub")
+
+    eth_account.Account = Account
+    sys.modules["eth_account"] = eth_account

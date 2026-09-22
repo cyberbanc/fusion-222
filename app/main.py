@@ -6,20 +6,24 @@ import io
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
 from . import db
 from .config import SETTINGS
+from .live_execution import from_env as live_executor_from_env
 from .pancake_client import from_env
 from .shadow import summarize
 from .worker import bootstrap_rounds, loop, signal_cache, status as worker_status
 
 _STOP: Optional[asyncio.Event] = None
 _TASK: Optional[asyncio.Task] = None
-_BUILD_REVISION = "fusion-222-v1.0.5-no-breaker-v1366-only"
+_BUILD_REVISION = "fusion-222-real-v1.0.0-isolated-live"
+_DASHBOARD_PATH = Path(__file__).resolve().parent.parent / "TILDA_FUSION_222_REAL.html"
 
 
 def _json_safe(value: Any) -> Any:
@@ -55,7 +59,7 @@ async def lifespan(app: FastAPI):
             _TASK.cancel()
 
 
-app = FastAPI(title="FUSION-222 Paper Bot", version=SETTINGS.version, lifespan=lifespan)
+app = FastAPI(title="FUSION-222 Real Bot", version=SETTINGS.version, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -72,17 +76,24 @@ def root():
         "service": SETTINGS.service_name,
         "version": SETTINGS.version,
         "build_revision": _BUILD_REVISION,
-        "mode": "PAPER",
+        "mode": "REAL",
         "strategy": "EV>=2%, selected probability>=53%, payout ready, Shadow Recent, Quality PF>=0.85, Quality WR display-only, fixed $22; circuit breaker disabled",
         "stake_mode": "fixed_22",
         "fixed_stake": SETTINGS.fixed_stake,
-        "database_mode": "shared Fusion PostgreSQL; main history read-only; FUSION-222 writes only private fusion222_* tables",
-        "retro_reporting": "virtual bank/PnL/PF/DD are initialized ONLY from the historical v1.3.6.6 slice replayed with FUSION-222 logic; timer uses the same v1.3.6.6 start",
+        "database_mode": "shared Fusion PostgreSQL; paper/base history read-only; real bot writes only fusion222_real_* tables",
+        "wallet_accounting": "dashboard bank is the current on-chain BNB balance converted at the current Chainlink BNB/USD price",
         "signal_url": "/signal",
         "status_url": "/status?history=none",
-        "combined_history_url": "/history/combined?limit=100",
-        "combined_csv_url": "/history/export-combined.csv",
+        "real_history_url": "/history/live?limit=100&trades_only=true",
+        "transactions_url": "/transactions?limit=100",
+        "real_csv_url": "/history/export-real.csv",
+        "dashboard_url": "/dashboard",
     }
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard():
+    return HTMLResponse(_DASHBOARD_PATH.read_text(encoding="utf-8"))
 
 
 @app.get("/healthz")
@@ -101,6 +112,7 @@ def health():
         "connected": client.is_connected(),
         "database_connected": db.ping(),
         "worker": worker_status(),
+        "execution": live_executor_from_env(client).status(),
         "tables": db.table_names(),
         "fixed_stake": SETTINGS.fixed_stake,
         "min_trade_ev": SETTINGS.min_trade_ev,
@@ -180,50 +192,53 @@ def status(
 ):
     metrics = db.state_metrics()
     live_count = db.history_count()
-    retro_count = int(metrics.get("retro_trades_count") or db.retro_history_count())
     rows: list[dict[str, Any]] = []
     if history == "recent":
-        rows = db.combined_trade_history(min(limit, SETTINGS.history_api_max_limit), offset)
+        rows = db.history(min(limit, SETTINGS.history_api_max_limit), offset)
     elif history == "all":
-        rows = db.combined_trade_history(SETTINGS.history_api_max_limit, offset)
-    started_at = metrics.get("strategy_started_at")
+        rows = db.history(SETTINGS.history_api_max_limit, offset)
+    started_at = metrics.get("live_started_at") or metrics.get("created_at")
     live_started_at = metrics.get("live_started_at")
+    worker = worker_status()
+    wallet = (worker.get("last_tick") or {}).get("wallet") or db.latest_wallet_snapshot() or {}
+    execution = worker.get("execution") or live_executor_from_env().status()
+    actual_metrics = db.actual_trade_metrics()
+    wallet_accounting = db.wallet_summary()
     return _json_safe(
         {
             "ok": True,
             "service": SETTINGS.service_name,
             "version": SETTINGS.version,
             "build_revision": _BUILD_REVISION,
-            "paper_state": metrics,
-            "worker": worker_status(),
+            "mode": "REAL",
+            "strategy_state": metrics,
+            "wallet": wallet,
+            "wallet_accounting": wallet_accounting,
+            "actual_metrics": actual_metrics,
+            "execution": execution,
+            "worker": worker,
             "version_started_at": started_at,
             "uptime_seconds": _uptime(started_at),
             "live_started_at": live_started_at,
             "live_uptime_seconds": _uptime(live_started_at),
-            "retro_scope": {
-                "source": "main Fusion database",
+            "signal_reference": {
+                "source": "current FUSION-222 paper history (read-only)",
                 "base_decisions_table": db.table_names().get("base_decisions_read_only"),
-                "cutoff_epoch": metrics.get("retro_cutoff_epoch"),
-                "anchor_timer_version": SETTINGS.retro_anchor_version,
-                "scope_version": SETTINGS.retro_scope_version,
-                "all_versions_replayed": False,
+                "paper_reference_table": db.table_names().get("paper_reference_read_only"),
+                "base_cutoff_epoch": SETTINGS.base_history_cutoff_epoch,
                 "fixed_stake": SETTINGS.fixed_stake,
                 "min_trade_ev": SETTINGS.min_trade_ev,
                 "min_signal_probability": SETTINGS.min_signal_probability,
                 "quality_win_rate_is_gate": SETTINGS.quality_win_rate_filter_enabled,
                 "quality_pf_min": SETTINGS.quality_min_profit_factor,
-                "retro_trades": retro_count,
-                "retro_pnl": metrics.get("retro_pnl"),
-                "retro_max_drawdown": metrics.get("retro_max_drawdown"),
             },
-            "history_storage": "shared PostgreSQL; base read-only + private FUSION-222 tables",
-            "combined_trade_count": db.combined_trade_count(),
-            "retro_trade_count": retro_count,
+            "history_storage": "separate fusion222_real_* tables; paper tables are read-only",
             "live_decision_count": live_count,
+            "real_trade_count": db.history_count(trades_only=True),
+            "transaction_count": db.transaction_count(),
             "history": rows,
-            "history_download_csv": "/history/export-combined.csv",
-            "retro_history_download_csv": "/history/export-retro.csv",
-            "live_history_download_csv": "/history/export-live.csv",
+            "history_download_csv": "/history/export-real.csv",
+            "transactions_download_csv": "/transactions/export.csv",
         }
     )
 
@@ -236,12 +251,18 @@ def history_live(limit: int = Query(1000, ge=1), offset: int = Query(0, ge=0), t
 
 @app.get("/history/retro")
 def history_retro(limit: int = Query(1000, ge=1), offset: int = Query(0, ge=0)):
-    return _json_safe({"ok": True, "count": db.retro_history_count(), "history": db.retro_history(limit, offset)})
+    return {"ok": True, "count": 0, "history": [], "message": "REAL service has no retro trade history"}
 
 
 @app.get("/history/combined")
 def history_combined(limit: int = Query(1000, ge=1), offset: int = Query(0, ge=0)):
-    return _json_safe({"ok": True, "count": db.combined_trade_count(), "history": db.combined_trade_history(limit, offset)})
+    rows = db.history(limit, offset, trades_only=True)
+    return _json_safe({"ok": True, "count": db.history_count(trades_only=True), "history": rows})
+
+
+@app.get("/transactions")
+def transactions(limit: int = Query(1000, ge=1), offset: int = Query(0, ge=0)):
+    return _json_safe({"ok": True, "count": db.transaction_count(), "transactions": db.transactions(limit, offset)})
 
 
 def _csv_response(rows: list[dict[str, Any]], filename: str) -> Response:
@@ -265,17 +286,33 @@ def _csv_response(rows: list[dict[str, Any]], filename: str) -> Response:
 
 @app.get("/history/export-combined.csv")
 def export_combined():
-    return _csv_response(db.combined_trade_history(SETTINGS.history_api_max_limit, 0), "fusion_222_history_COMBINED.csv")
+    return _csv_response(db.history(SETTINGS.history_api_max_limit, 0), "fusion_222_real_history.csv")
 
 
 @app.get("/history/export-retro.csv")
 def export_retro():
-    return _csv_response(db.retro_history(SETTINGS.history_api_max_limit, 0), "fusion_222_history_RETRO.csv")
+    return _csv_response([], "fusion_222_real_history_RETRO_NOT_USED.csv")
 
 
 @app.get("/history/export-live.csv")
 def export_live():
     return _csv_response(db.history(SETTINGS.history_api_max_limit, 0), "fusion_222_history_LIVE.csv")
+
+
+@app.get("/history/export-real.csv")
+def export_real():
+    return _csv_response(
+        db.history(SETTINGS.history_api_max_limit, 0),
+        "fusion_222_real_history.csv",
+    )
+
+
+@app.get("/transactions/export.csv")
+def export_transactions():
+    return _csv_response(
+        db.transactions(SETTINGS.history_api_max_limit, 0),
+        "fusion_222_real_transactions.csv",
+    )
 
 
 @app.get("/shadow/performance")

@@ -1,65 +1,24 @@
-FUSION-222 v1.0.5 — INSTALL (NO BREAKER, v1.3.6.6 RETRO ONLY)
-===================================================================
+FUSION-222 REAL v1.0.0
+======================
 
-1. Replace the GitHub contents of the existing Railway service `fusion-222` with this package.
+The real service mirrors the exact locked paper decision for each epoch from
+REFERENCE_DECISIONS_TABLE. It never calculates a second independent signal.
 
-2. Keep it in the SAME Railway project as the existing `fusion-ev` service.
+1. Keep the existing Railway service `fusion-222` on GitHub branch `main`.
+2. Create a second Railway service `fusion-222-real` from branch `live-real`.
+3. Connect the same Railway Postgres with DATABASE_URL=${{Postgres.DATABASE_URL}}.
+4. Add the variables from RAILWAY_VARIABLES_FUSION_222.txt with WORKER_ENABLED=false.
+5. Add WALLET_PRIVATE_KEY directly in Railway. Never place it in GitHub, Tilda,
+   logs, support messages or chat. Optionally set WALLET_ADDRESS as an exact
+   address-match safety check.
+6. Deploy and verify:
+   - /health: database_connected=true
+   - execution.ready=true
+   - displayed wallet address and balance match MetaMask
+   - tables all start with fusion222_real_ except the two read-only sources
+7. Set WORKER_ENABLED=true only after those checks pass.
+8. Open /dashboard. The same HTML is in TILDA_FUSION_222_REAL.html for a separate
+   Tilda T123 block.
 
-3. Do NOT create another PostgreSQL database. Use the SAME existing Postgres:
-
-   DATABASE_URL=${{Postgres.DATABASE_URL}}
-
-4. Replace Railway variables with the complete block from:
-   RAILWAY_VARIABLES_FUSION_222.txt
-
-   Important new v1.0.5 private tables:
-   - fusion222_v1366_nobreaker_decisions
-   - fusion222_v1366_nobreaker_state
-   - fusion222_v1366_nobreaker_snapshots
-
-   Do not change these names back to the v1.0.4 names. The new state table is required so retro accounting is recalculated WITHOUT the old breaker.
-
-5. Deploy.
-
-6. Open /healthz. Expected: ok=true, service=FUSION-222, version=FUSION-222-v1.0.5.
-
-7. Open /health and check tables:
-   - base_decisions_read_only = <auto-detected main Fusion history table>
-   - decisions = fusion222_v1366_nobreaker_decisions
-   - state = fusion222_v1366_nobreaker_state
-   - snapshots = fusion222_v1366_nobreaker_snapshots
-
-8. Open /status?history=none. On the supplied 2026-08-11 snapshot, before new v1.0.5 live trades, expected values are approximately:
-   - bank $1,081.06
-   - PnL +$581.06
-   - trades 168
-   - W/L 93/75
-   - WR 55.36%
-   - PF 1.352
-   - Max DD $123.42
-   - scope_version = 1.3.6.6
-   - all_versions_replayed = false
-
-   Values may differ slightly because the main Fusion database has continued receiving 1.3.6.6 rows after the supplied CSV snapshot.
-
-9. Public domain used by Tilda:
-   https://fusion-222-production.up.railway.app
-
-10. Replace the Tilda T123 code with TILDA_FUSION_222.html from this package.
-
-Strategy now:
-- EV >= 2%
-- selected probability >= 53%
-- payout bucket ready
-- Shadow Recent enabled
-- Quality PF >= 0.85
-- Quality WR display-only
-- NO circuit breaker
-- every otherwise-eligible signal trades
-- fixed $22
-
-Safety:
-- PAPER only
-- base Fusion decisions are read-only
-- retro dashboard scope = only 1.3.6.6
-- v1.0.4 tables are left untouched as archive
+Rollback: set WORKER_ENABLED=false. This stops new decisions/transactions and
+does not affect the paper service or either history.

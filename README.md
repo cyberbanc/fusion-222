@@ -1,63 +1,61 @@
-# FUSION-222 v1.0.5 — NO BREAKER
+# FUSION-222 REAL v1.0.0
 
-Independent PAPER bot for PancakeSwap Prediction using the Fusion EV ensemble and the current gate:
+Isolated real-money PancakeSwap Prediction service. It mirrors each exact,
+already-locked production paper decision without changing the paper service:
 
 - selected EV >= 2%
 - selected-side probability >= 53%
-- payout bucket must be ready
-- Shadow Recent remains active (`8`, minimum PnL `-30`)
-- Quality Profit Factor remains active (`>= 0.85`)
-- Quality Win Rate is calculated/displayed but does NOT block trades
-- **circuit breaker removed: no trade is skipped because of prior losses**
-- fixed stake: **$22**
+- payout bucket ready
+- Shadow Recent: 8 trades, minimum PnL -30
+- Quality PF >= 0.85; Quality WR is display-only
+- no circuit breaker
+- fixed stake $22, converted to BNB using the decision-time Chainlink price
 
-## Database architecture
+## Isolation
 
-FUSION-222 uses the **same PostgreSQL database as the main `fusion-ev` bot**.
+The paper service stays on branch `main`. This real service runs from branch
+`live-real` and writes only these tables:
 
-It auto-detects the existing main Fusion decisions table and round-history table. The historical main Fusion decisions table is read-only for FUSION-222. New v1.0.5 records are isolated in:
+- `fusion222_real_decisions`
+- `fusion222_real_state`
+- `fusion222_real_snapshots`
+- `fusion222_real_transactions`
+- `fusion222_real_wallet_snapshots`
 
-- `fusion222_v1366_nobreaker_decisions`
-- `fusion222_v1366_nobreaker_state`
-- `fusion222_v1366_nobreaker_snapshots`
+The live service reads `fusion222_v1366_nobreaker_decisions` as its decision
+source and rolling Shadow/Quality reference. It waits for the paper row and does
+not independently recalculate the signal. It never updates or deletes paper
+history.
 
-These new table names are intentional. v1.0.4 already initialized retro accounting with the 3x3 breaker, so reusing the old state table would preserve the wrong 149-trade retro state. v1.0.5 starts a clean NO-BREAKER replay without deleting or altering the old tables.
+## Real execution and reconciliation
 
-## Retro initialization — v1.3.6.6 ONLY
-
-On first successful startup, FUSION-222 replays **only rows where `strategy_version = 1.3.6.6`** from the main Fusion database and applies the v1.0.5 NO-BREAKER rules. The virtual bank starts at `$500`. Other historical versions do not enter dashboard Bank/PnL/PF/DD.
-
-The dashboard timer remains anchored to the first stored `1.3.6.6` decision. After initialization, the retro cutoff is frozen and new FUSION-222 paper trades continue from the reconstructed virtual state.
-
-Using the supplied 2026-08-11 v1.3.6.6 snapshot, exact NO-BREAKER validation is:
-
-- 168 trades
-- 93 WIN / 75 LOSS
-- 55.3571% win rate
-- PnL **+$581.063701**
-- bank **$1,081.063701** from $500
-- PF **1.352160**
-- Max DD **$123.417403**
-- min bank **$451.857755**
-- peak bank **$1,186.318630**
-- max loss streak 4
-
-Numbers can move slightly if the main `1.3.6.6` table receives additional settled rows before the first v1.0.5 boot.
+- The wallet address is derived from `WALLET_PRIVATE_KEY` and optionally checked
+  against `WALLET_ADDRESS`.
+- The private key is never returned by the API or written to PostgreSQL.
+- Before every send, the bot checks the PancakeSwap `ledger(epoch, wallet)`.
+- The deterministic signed transaction hash is stored before broadcast.
+- A restart reconciles the stored tx hash and contract ledger instead of sending
+  a duplicate bet.
+- Winning/refundable epochs are claimed automatically.
+- Bet/claim value, gas, before/after balances and tx hashes are stored separately.
+- Wallet snapshots expose the actual on-chain BNB balance and its USD value.
+- The dashboard reports observed wallet change, known bot cash flow and any
+  external/unreconciled difference.
 
 ## API
 
+- `/dashboard`
 - `/healthz`
 - `/health`
 - `/signal`
 - `/status?history=none`
-- `/history/combined?limit=100`
-- `/history/retro?limit=100`
 - `/history/live?limit=100`
-- `/history/export-combined.csv`
-- `/history/export-retro.csv`
-- `/history/export-live.csv`
-- `/shadow/performance`
+- `/history/export-real.csv`
+- `/transactions?limit=100`
+- `/transactions/export.csv`
 
-## v1.0.5 change
+## Activation
 
-The 3-loss / skip-3-signals circuit breaker is removed from both historical replay and forward paper trading. EV/probability/payout/Shadow/Quality-PF filters remain unchanged. Fixed stake remains $22. v1.0.4 startup hardening and PostgreSQL auto-detection fixes are retained.
+Deploy with `WORKER_ENABLED=false` first. Add `WALLET_PRIVATE_KEY` directly in
+Railway (never in chat or GitHub), optionally add `WALLET_ADDRESS`, verify
+`/health` and the displayed address/balance, then set `WORKER_ENABLED=true`.

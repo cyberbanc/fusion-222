@@ -35,7 +35,9 @@ def prep(monkeypatch, ev=0.03, p=0.55, shadow_allowed=True):
 
 def test_good_signal_trades_fixed_22(monkeypatch):
     d = worker.create_locked_decision(prep(monkeypatch))
-    assert d["trade_executed"] is True
+    assert d["execution_requested"] is True
+    assert d["trade_executed"] is False
+    assert d["execution_status"] == "PENDING"
     assert d["stake"] == 22.0
     assert d["stake_mode"] == "fixed_22"
 
@@ -51,3 +53,68 @@ def test_probability_below_53_is_blocked(monkeypatch):
     assert d["trade_executed"] is False
     assert d["no_trade_reason"] == "PROBABILITY_BELOW_53_PERCENT"
 
+
+def test_real_decision_mirrors_exact_paper_row(monkeypatch):
+    snap = Snapshot(
+        betting_epoch=456,
+        live_epoch=455,
+        chain_timestamp=2000,
+        seconds_to_lock=37,
+        chainlink_price=612.5,
+    )
+    reference = {
+        "betting_epoch": 456,
+        "live_epoch": 455,
+        "locked_at_chain_timestamp": 1998,
+        "locked_at_seconds_to_lock": 39,
+        "signal": "DOWN",
+        "probability_up": 0.44,
+        "probability_down": 0.56,
+        "expected_coeff_up": 1.8,
+        "expected_coeff_down": 2.1,
+        "ev_up": -0.208,
+        "ev_down": 0.176,
+        "selected_ev": 0.176,
+        "agreement": 0.8,
+        "decision_quality": "FUSION_222_TRADE",
+        "stake": 22.0,
+        "trade_executed": True,
+        "features_json": {"paper_feature": 1},
+        "components_json": [],
+        "weights_json": {},
+        "snapshot_json": {"paper_snapshot": True},
+        "shadow_stats_json": {},
+        "strategy_version": "FUSION-222-v1.0.5",
+        "stake_mode": "fixed_22",
+        "stake_tier": "FIXED_22",
+        "source_key": "EV_PRIMARY",
+    }
+    monkeypatch.setattr(worker.db, "get_decision", lambda epoch: None)
+    monkeypatch.setattr(worker.db, "get_reference_decision", lambda epoch: reference)
+    monkeypatch.setattr(worker.db, "insert_decision", lambda data: data)
+
+    d = worker.create_mirrored_decision(snap)
+
+    assert d is not None
+    assert d["signal"] == "DOWN"
+    assert d["stake"] == 22.0
+    assert d["execution_requested"] is True
+    assert d["trade_executed"] is False
+    assert d["execution_status"] == "PENDING"
+    assert d["origin"] == "LIVE_REAL_MIRROR"
+    assert d["features_json"]["mirrored_from_paper"] is True
+    assert d["strategy_version"] == "FUSION-222-v1.0.5"
+
+
+def test_real_mirror_waits_when_paper_row_is_not_ready(monkeypatch):
+    snap = Snapshot(
+        betting_epoch=789,
+        live_epoch=788,
+        chain_timestamp=3000,
+        seconds_to_lock=40,
+        chainlink_price=600.0,
+    )
+    monkeypatch.setattr(worker.db, "get_decision", lambda epoch: None)
+    monkeypatch.setattr(worker.db, "get_reference_decision", lambda epoch: None)
+
+    assert worker.create_mirrored_decision(snap) is None

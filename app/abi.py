@@ -35,6 +35,75 @@ PREDICTION_ABI = [
         "stateMutability": "view",
         "type": "function",
     },
+    {
+        "inputs": [{"internalType": "uint256", "name": "epoch", "type": "uint256"}],
+        "name": "betBull",
+        "outputs": [],
+        "stateMutability": "payable",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "uint256", "name": "epoch", "type": "uint256"}],
+        "name": "betBear",
+        "outputs": [],
+        "stateMutability": "payable",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {"internalType": "uint256", "name": "", "type": "uint256"},
+            {"internalType": "address", "name": "", "type": "address"},
+        ],
+        "name": "ledger",
+        "outputs": [
+            {"internalType": "uint256", "name": "amount", "type": "uint256"},
+            {"internalType": "uint8", "name": "position", "type": "uint8"},
+            {"internalType": "bool", "name": "claimed", "type": "bool"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {"internalType": "uint256", "name": "epoch", "type": "uint256"},
+            {"internalType": "address", "name": "user", "type": "address"},
+        ],
+        "name": "claimable",
+        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {"internalType": "uint256", "name": "epoch", "type": "uint256"},
+            {"internalType": "address", "name": "user", "type": "address"},
+        ],
+        "name": "refundable",
+        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "uint256[]", "name": "epochs", "type": "uint256[]"}],
+        "name": "claim",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "minBetAmount",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "paused",
+        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
 ]
 
 CHAINLINK_ABI = [

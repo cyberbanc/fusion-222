@@ -8,6 +8,7 @@ from typing import Any
 from . import db
 from .config import SETTINGS
 from .ensemble import forecast
+from .live_execution import from_env as live_executor_from_env
 from .pancake_client import PancakeClient, from_env
 from .risk import fixed_stake_decision
 from .shadow import evaluate as evaluate_shadow
@@ -184,9 +185,11 @@ def create_locked_decision(snapshot) -> dict[str, Any]:
 
     stake_decision = fixed_stake_decision()
     stake = stake_decision.stake if allowed else 0.0
-    trade_executed = allowed and stake_decision.eligible and stake > 0.0
-    stake_tier = stake_decision.tier if trade_executed else "NO_TRADE"
-    prefix = "FUSION_222_TRADE" if trade_executed else "FUSION_222_NO_TRADE"
+    execution_requested = allowed and stake_decision.eligible and stake > 0.0
+    real_mode = SETTINGS.execution_mode == "REAL"
+    trade_executed = execution_requested and not real_mode
+    stake_tier = stake_decision.tier if execution_requested else "NO_TRADE"
+    prefix = "FUSION_222_TRADE" if execution_requested else "FUSION_222_NO_TRADE"
     decision_quality = f"{prefix}_{no_trade_reason or shadow_reason}_{result.selection_reason}"
     state = db.get_state()
 
@@ -195,8 +198,10 @@ def create_locked_decision(snapshot) -> dict[str, Any]:
         {
             "strategy": "FUSION-222",
             "trade_executed": trade_executed,
+            "execution_requested": execution_requested,
+            "execution_mode": SETTINGS.execution_mode,
             "no_trade_reason": no_trade_reason,
-            "trade_rule": "EV>=2%_P>=53%_SHADOW_RECENT_QUALITY_PF_FIXED22" if trade_executed else "NO_TRADE",
+            "trade_rule": "EV>=2%_P>=53%_SHADOW_RECENT_QUALITY_PF_FIXED22" if execution_requested else "NO_TRADE",
             "min_trade_ev": SETTINGS.min_trade_ev,
             "min_signal_probability": SETTINGS.min_signal_probability,
             "selected_probability": selected_probability,
@@ -253,8 +258,117 @@ def create_locked_decision(snapshot) -> dict[str, Any]:
             "stake_tier": stake_tier,
             "breaker_applied": False,
             "origin": "LIVE",
+            "execution_requested": execution_requested,
+            "execution_status": "PENDING" if execution_requested and real_mode else "CONFIRMED" if trade_executed else "SKIPPED",
+            "wallet_address": live_executor_from_env().address if real_mode else None,
+            "stake_bnb": None,
+            "bnb_usd_price": float(getattr(snapshot, "chainlink_price", 0.0)) if real_mode else None,
+            "reconciliation_status": "AWAITING_ONCHAIN_EXECUTION" if execution_requested and real_mode else None,
         }
     )
+
+
+def create_mirrored_decision(snapshot) -> dict[str, Any] | None:
+    """Copy the exact locked paper decision, then execute it independently on-chain.
+
+    The paper table is read-only. If the paper worker has not written this epoch
+    yet, return ``None`` so a later tick can retry instead of inventing a second
+    strategy decision.
+    """
+    existing = db.get_decision(snapshot.betting_epoch)
+    if existing:
+        return existing
+    reference = db.get_reference_decision(snapshot.betting_epoch)
+    if not reference:
+        return None
+
+    paper_executed = bool(reference.get("trade_executed"))
+    stake = float(reference.get("stake") or 0.0) if paper_executed else 0.0
+    execution_requested = paper_executed and stake > 0.0
+    features = dict(reference.get("features_json") or {})
+    features.update(
+        {
+            "execution_mode": SETTINGS.execution_mode,
+            "execution_requested": execution_requested,
+            "mirrored_from_paper": True,
+            "paper_reference_table": SETTINGS.reference_decisions_table,
+            "paper_strategy_version": reference.get("strategy_version"),
+            "paper_created_at": str(reference.get("created_at") or ""),
+        }
+    )
+    return db.insert_decision(
+        {
+            "betting_epoch": int(reference.get("betting_epoch") or snapshot.betting_epoch),
+            "live_epoch": reference.get("live_epoch", snapshot.live_epoch),
+            "locked_at_chain_timestamp": reference.get(
+                "locked_at_chain_timestamp", snapshot.chain_timestamp
+            ),
+            "locked_at_seconds_to_lock": reference.get(
+                "locked_at_seconds_to_lock", snapshot.seconds_to_lock
+            ),
+            "signal": reference.get("signal"),
+            "probability_up": reference.get("probability_up"),
+            "probability_down": reference.get("probability_down"),
+            "expected_coeff_up": reference.get("expected_coeff_up"),
+            "expected_coeff_down": reference.get("expected_coeff_down"),
+            "ev_up": reference.get("ev_up"),
+            "ev_down": reference.get("ev_down"),
+            "selected_ev": reference.get("selected_ev"),
+            "agreement": reference.get("agreement"),
+            "decision_quality": reference.get("decision_quality"),
+            "stake": stake,
+            "bank_before": reference.get("bank_before"),
+            "components_json": reference.get("components_json") or [],
+            "weights_json": reference.get("weights_json") or {},
+            "features_json": features,
+            "snapshot_json": reference.get("snapshot_json") or snapshot.to_dict(),
+            "raw_expected_coeff_up": reference.get("raw_expected_coeff_up"),
+            "raw_expected_coeff_down": reference.get("raw_expected_coeff_down"),
+            "payout_correction_up": reference.get("payout_correction_up"),
+            "payout_correction_down": reference.get("payout_correction_down"),
+            "strategy_version": reference.get("strategy_version"),
+            "payout_bucket_up": reference.get("payout_bucket_up"),
+            "payout_bucket_down": reference.get("payout_bucket_down"),
+            # A real trade becomes executed only after its receipt is confirmed.
+            "trade_executed": False,
+            "no_trade_reason": reference.get("no_trade_reason"),
+            "source_key": reference.get("source_key"),
+            "selection_reason": reference.get("selection_reason"),
+            "shadow_allowed": reference.get("shadow_allowed"),
+            "shadow_reason": reference.get("shadow_reason"),
+            "shadow_stats_json": reference.get("shadow_stats_json") or {},
+            "stake_mode": reference.get("stake_mode") or "fixed_22",
+            "stake_tier": reference.get("stake_tier") or (
+                "FIXED_22" if execution_requested else "NO_TRADE"
+            ),
+            "breaker_applied": bool(reference.get("breaker_applied")),
+            "origin": "LIVE_REAL_MIRROR",
+            "execution_requested": execution_requested,
+            "execution_status": "PENDING" if execution_requested else "SKIPPED",
+            "wallet_address": live_executor_from_env().address,
+            "stake_bnb": None,
+            "bnb_usd_price": float(getattr(snapshot, "chainlink_price", 0.0)),
+            "reconciliation_status": (
+                "AWAITING_ONCHAIN_EXECUTION" if execution_requested else "PAPER_NO_TRADE"
+            ),
+        }
+    )
+
+
+def reconcile_actual_results(client: PancakeClient, bnb_usd_price: float) -> int:
+    if SETTINGS.execution_mode != "REAL":
+        return 0
+    executor = live_executor_from_env(client)
+    changed = 0
+    for decision in db.actual_reconciliation_candidates(limit=50):
+        try:
+            before = decision.get("actual_pnl_bnb")
+            updated = executor.finalize_actual(decision, bnb_usd_price)
+            if before is None and updated.get("actual_pnl_bnb") is not None:
+                changed += 1
+        except Exception:
+            continue
+    return changed
 
 
 def tick() -> dict[str, Any]:
@@ -276,8 +390,33 @@ def tick() -> dict[str, Any]:
         decision = db.get_decision(snapshot.betting_epoch)
         created = False
         if decision is None and snapshot.decision_window:
-            decision = create_locked_decision(snapshot)
-            created = True
+            if SETTINGS.execution_mode == "REAL" and SETTINGS.mirror_paper_decisions:
+                decision = create_mirrored_decision(snapshot)
+            else:
+                decision = create_locked_decision(snapshot)
+            created = decision is not None
+        executor_status: dict[str, Any] | None = None
+        wallet: dict[str, Any] = {}
+        if SETTINGS.execution_mode == "REAL":
+            executor = live_executor_from_env(client)
+            if decision and bool(decision.get("execution_requested")):
+                has_tx = bool(decision.get("tx_hash"))
+                if has_tx or snapshot.decision_window:
+                    try:
+                        decision = executor.execute_bet(decision, float(snapshot.chainlink_price))
+                    except Exception as exc:
+                        decision = db.update_execution(
+                            int(decision["betting_epoch"]),
+                            execution_status="ERROR",
+                            execution_error=f"{type(exc).__name__}: {exc}",
+                            trade_executed=False,
+                        )
+            try:
+                wallet = executor.wallet_snapshot(float(snapshot.chainlink_price))
+            except Exception as exc:
+                wallet = {"error": f"{type(exc).__name__}: {exc}"}
+            executor_status = executor.status()
+        reconciled_actual = reconcile_actual_results(client, float(snapshot.chainlink_price))
         state = db.get_state()
         result = {
             "ok": True,
@@ -288,6 +427,7 @@ def tick() -> dict[str, Any]:
             "live_epoch": snapshot.live_epoch,
             "seconds_to_lock": snapshot.seconds_to_lock,
             "decision_window": snapshot.decision_window,
+            "mirror_paper_decisions": SETTINGS.mirror_paper_decisions,
             "snapshot_saved": snapshot_saved,
             "decision_locked": decision is not None,
             "trade_executed": decision.get("trade_executed") if decision else None,
@@ -299,8 +439,11 @@ def tick() -> dict[str, Any]:
             "min_trade_ev": SETTINGS.min_trade_ev,
             "min_signal_probability": SETTINGS.min_signal_probability,
             "settled_now": settled,
+            "actual_results_reconciled_now": reconciled_actual,
             "sync": sync,
             "rpc": client.rpc_status(),
+            "execution": executor_status,
+            "wallet": wallet,
             "created_or_existing_decision": created,
             "duration_ms": round((time.time() - started) * 1000, 2),
             "updated_at": int(time.time()),
@@ -348,6 +491,7 @@ def status() -> dict[str, Any]:
         "quality_win_rate_filter_enabled": SETTINGS.quality_win_rate_filter_enabled,
         "quality_min_profit_factor": SETTINGS.quality_min_profit_factor,
         "require_payout_bucket_ready": SETTINGS.require_payout_bucket_ready,
+        "execution": live_executor_from_env().status() if SETTINGS.execution_mode == "REAL" else {"mode": "PAPER"},
         "last_tick": last_tick,
     }
 
