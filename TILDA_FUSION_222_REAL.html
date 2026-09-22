@@ -34,7 +34,7 @@
 </div>
 <script>
 (function(){
-const API_BASE=window.FUSION_222_REAL_API||(location.hostname.endsWith("railway.app")?location.origin:"https://fusion-222-real.up.railway.app");
+const API_BASE=window.FUSION_222_REAL_API||(location.hostname.endsWith("railway.app")?location.origin:"https://fusion-222-real-production.up.railway.app");
 const $=id=>document.getElementById(id),INTERVAL=4000;let busy=false;
 function n(v,d=2){const x=Number(v);return Number.isFinite(x)?x.toFixed(d).replace(".",","):"—"}function money(v){const x=Number(v);if(!Number.isFinite(x))return"—";return(x<0?"-$":"$")+n(Math.abs(x),2)}function pct(v){const x=Number(v);return Number.isFinite(x)?n(x*100,2)+"%":"—"}function esc(v){return String(v??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;")}function dt(v){if(!v)return"—";const d=new Date(v);return isNaN(d)?"—":d.toLocaleString("ru-RU")}function cls(v){const x=Number(v);return x>0?"pos":x<0?"neg":""}function short(h){return h?h.slice(0,8)+"…"+h.slice(-6):"—"}function link(h){return h?'<a class="r-link" target="_blank" href="https://bscscan.com/tx/'+encodeURIComponent(h)+'">'+esc(short(h))+'</a>':"—"}
 async function api(path){const c=new AbortController(),t=setTimeout(()=>c.abort(),14000);try{const r=await fetch(API_BASE+path,{cache:"no-store",signal:c.signal});if(!r.ok)throw Error("HTTP "+r.status);return await r.json()}finally{clearTimeout(t)}}
