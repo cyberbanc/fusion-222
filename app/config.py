@@ -79,7 +79,9 @@ class Settings:
         "PREDICTION_CONTRACT",
         "0x18B2A687610328590Bc8F2e5fEdDe3b582A49cdA",
     )
-    worker_enabled: bool = _bool("WORKER_ENABLED", True)
+    # Live-money deployments always start disarmed. Activation must be an
+    # explicit Railway variable change after wallet/address verification.
+    worker_enabled: bool = _bool("WORKER_ENABLED", False)
     poll_seconds: float = _float("POLL_SECONDS", 3.0)
     prelock_seconds: int = _int("PRELOCK_SECONDS", 40)
     min_decision_seconds: int = _int("MIN_DECISION_SECONDS", 8)
