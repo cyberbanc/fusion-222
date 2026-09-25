@@ -39,6 +39,8 @@ def _json_safe(value: Any) -> Any:
 async def lifespan(app: FastAPI):
     global _STOP, _TASK
     db.init_db()
+    state = db.get_state()
+    print(f"UP-ONLY-STARTUP bank={state.get('bank')} cutoff={state.get('retro_cutoff_epoch')} retro_trades={state.get('retro_trades_count')} tables={db.table_names()}", flush=True)
     try:
         await asyncio.wait_for(asyncio.to_thread(bootstrap_rounds, from_env()), timeout=45)
     except Exception:

@@ -586,7 +586,7 @@ def _unused_legacy_retro_cutoff_epoch() -> int:
 def _retro_replay(cutoff_epoch: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     data = _up_seed()
     if cutoff_epoch != int(data["cutoff_epoch"]):
-        raise RuntimeError("UP-only replay cutoff differs from the packaged backtest")
+        raise RuntimeError(f"UP-only replay cutoff {cutoff_epoch} differs from packaged {data['cutoff_epoch']}")
     bank = peak = minimum = float(SETTINGS.start_bank)
     drawdown = profit = loss = 0.0
     wins = losses = streak = max_streak = 0
