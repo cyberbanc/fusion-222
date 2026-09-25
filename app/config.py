@@ -71,6 +71,7 @@ class Settings:
         "0x18B2A687610328590Bc8F2e5fEdDe3b582A49cdA",
     )
     worker_enabled: bool = _bool("WORKER_ENABLED", True)
+    up_only: bool = _bool("UP_ONLY", True)
     poll_seconds: float = _float("POLL_SECONDS", 3.0)
     prelock_seconds: int = _int("PRELOCK_SECONDS", 40)
     min_decision_seconds: int = _int("MIN_DECISION_SECONDS", 8)

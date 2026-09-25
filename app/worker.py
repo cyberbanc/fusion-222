@@ -169,7 +169,10 @@ def create_locked_decision(snapshot) -> dict[str, Any]:
 
     allowed = True
     no_trade_reason: str | None = None
-    if SETTINGS.require_payout_bucket_ready and not selected_ready:
+    if SETTINGS.up_only and result.signal != "UP":
+        allowed = False
+        no_trade_reason = "DOWN_SKIPPED_UP_ONLY"
+    elif SETTINGS.require_payout_bucket_ready and not selected_ready:
         allowed = False
         no_trade_reason = "PAYOUT_BUCKET_NOT_READY"
     elif float(result.selected_ev) < SETTINGS.min_trade_ev:
@@ -193,7 +196,7 @@ def create_locked_decision(snapshot) -> dict[str, Any]:
     features = dict(result.features)
     features.update(
         {
-            "strategy": "FUSION-222",
+            "strategy": "FUSION-222-UP-ONLY",
             "trade_executed": trade_executed,
             "no_trade_reason": no_trade_reason,
             "trade_rule": "EV>=2%_P>=53%_SHADOW_RECENT_QUALITY_PF_FIXED22" if trade_executed else "NO_TRADE",
@@ -333,7 +336,8 @@ def status() -> dict[str, Any]:
     state = db.get_state() if db.enabled() else {}
     return {
         "enabled": SETTINGS.worker_enabled,
-        "strategy": "fusion_222_ev2_prob53_shadow_recent_quality_pf_fixed22",
+        "strategy": "fusion_222_up_only_ev2_prob53_shadow_recent_quality_pf_fixed22",
+        "up_only": SETTINGS.up_only,
         "version": SETTINGS.version,
         "stake_mode": "fixed_22",
         "fixed_stake": SETTINGS.fixed_stake,

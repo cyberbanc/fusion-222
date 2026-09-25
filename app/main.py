@@ -20,7 +20,7 @@ from .worker import bootstrap_rounds, loop, signal_cache, status as worker_statu
 
 _STOP: Optional[asyncio.Event] = None
 _TASK: Optional[asyncio.Task] = None
-_BUILD_REVISION = "fusion-222-v1.0.5-no-breaker-v1366-only"
+_BUILD_REVISION = "fusion-222-v1.0.5-no-breaker-up-only-all-history"
 
 
 def _json_safe(value: Any) -> Any:
@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
             _TASK.cancel()
 
 
-app = FastAPI(title="FUSION-222 Paper Bot", version=SETTINGS.version, lifespan=lifespan)
+app = FastAPI(title="FUSION-222 UP-only Paper Bot", version=SETTINGS.version, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -74,11 +74,11 @@ def root():
         "version": SETTINGS.version,
         "build_revision": _BUILD_REVISION,
         "mode": "PAPER",
-        "strategy": "EV>=2%, selected probability>=53%, payout ready, Shadow Recent, Quality PF>=0.85, Quality WR display-only, fixed $22; circuit breaker disabled",
+        "strategy": "UP only; EV>=2%, selected probability>=53%, payout ready, Shadow Recent, Quality PF>=0.85, Quality WR display-only, fixed $22; circuit breaker disabled",
         "stake_mode": "fixed_22",
         "fixed_stake": SETTINGS.fixed_stake,
         "database_mode": "shared Fusion PostgreSQL; main history read-only; FUSION-222 writes only private fusion222_* tables",
-        "retro_reporting": "virtual bank/PnL/PF/DD are initialized ONLY from the historical v1.3.6.6 slice replayed with FUSION-222 logic; timer uses the same v1.3.6.6 start",
+        "retro_reporting": "291 retrospective UP-only paper trades from 20,426 exported all-version decisions; future trades continue the same independent virtual bank",
         "signal_url": "/signal",
         "status_url": "/status?history=none",
         "combined_history_url": "/history/combined?limit=100",
@@ -202,12 +202,13 @@ def status(
             "live_started_at": live_started_at,
             "live_uptime_seconds": _uptime(live_started_at),
             "retro_scope": {
-                "source": "main Fusion database",
+                "source": "packaged counterfactual all-version UP-only replay",
                 "base_decisions_table": db.table_names().get("base_decisions_read_only"),
                 "cutoff_epoch": metrics.get("retro_cutoff_epoch"),
                 "anchor_timer_version": SETTINGS.retro_anchor_version,
                 "scope_version": SETTINGS.retro_scope_version,
-                "all_versions_replayed": False,
+                "all_versions_replayed": True,
+                "source_decisions": 20426,
                 "fixed_stake": SETTINGS.fixed_stake,
                 "min_trade_ev": SETTINGS.min_trade_ev,
                 "min_signal_probability": SETTINGS.min_signal_probability,

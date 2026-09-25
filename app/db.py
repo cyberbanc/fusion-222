@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import math
+import json
 import threading
 import time
+from pathlib import Path
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -561,6 +563,15 @@ def _base_rows(cutoff_epoch: int | None = None, strategy_version: str | None = N
 
 
 def _retro_cutoff_epoch() -> int:
+    return int(_up_seed()["cutoff_epoch"])
+
+
+def _up_seed() -> dict[str, Any]:
+    """Immutable counterfactual trades from the exported all-version history."""
+    return json.loads(Path(__file__).with_name("retro_up_only.json").read_text())
+
+
+def _unused_legacy_retro_cutoff_epoch() -> int:
     with conn() as c, c.cursor() as cur:
         cur.execute(
             sql.SQL(
@@ -573,6 +584,63 @@ def _retro_cutoff_epoch() -> int:
 
 
 def _retro_replay(cutoff_epoch: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    data = _up_seed()
+    if cutoff_epoch != int(data["cutoff_epoch"]):
+        raise RuntimeError("UP-only replay cutoff differs from the packaged backtest")
+    bank = peak = minimum = float(SETTINGS.start_bank)
+    drawdown = profit = loss = 0.0
+    wins = losses = streak = max_streak = 0
+    rows: list[dict[str, Any]] = []
+    for bet in data["bets"]:
+        amount = float(bet["pnl"])
+        before = bank
+        bank += amount
+        if abs(bank-float(bet["bank"])) > 0.00001:
+            raise RuntimeError("UP-only historical seed bank mismatch")
+        peak = max(peak, bank)
+        minimum = min(minimum, bank)
+        drawdown = max(drawdown, peak-bank)
+        if bet["win"]:
+            wins += 1
+            profit += amount
+            streak = 0
+        else:
+            losses += 1
+            loss -= amount
+            streak += 1
+            max_streak = max(max_streak, streak)
+        rows.append({
+            "betting_epoch": bet["epoch"], "signal": "UP", "origin": "RETRO",
+            "retro_source_version": bet["recorded_version"], "trade_executed": True,
+            "outcome": "WIN" if bet["win"] else "LOSS", "stake": SETTINGS.fixed_stake,
+            "pnl": amount, "projected_pnl": amount, "bank_before": before,
+            "bank_after": bank, "version_bank_after": bank,
+            "created_at": bet.get("created_at"),
+            "locked_at_chain_timestamp": bet.get("locked_at_chain_timestamp"),
+            "stake_mode": "fixed_22", "breaker_applied": False,
+            "decision_quality": "FUSION_222_UP_ONLY_RETRO_REPLAY",
+        })
+    if len(rows) != 291 or abs(bank-1393.0510759482756) > 0.00001 or abs(drawdown-182.47) > 0.01:
+        raise RuntimeError("UP-only historical seed does not match audited baseline")
+    metrics = {
+        "start_bank": SETTINGS.start_bank, "bank": bank, "pnl": bank-SETTINGS.start_bank,
+        "wins": wins, "losses": losses, "draws": 0,
+        "trades_count": len(rows), "win_rate": wins/len(rows),
+        "gross_profit": profit, "gross_loss": loss,
+        "profit_factor": profit/loss if loss else None,
+        "current_loss_streak": streak, "max_loss_streak": max_streak,
+        "peak_bank": peak, "min_bank": minimum, "max_drawdown": drawdown,
+        "breaker_loss_count": 0, "breaker_signals_remaining": 0, "breaker_trigger_count": 0,
+        "retro_cutoff_epoch": cutoff_epoch, "retro_scope_version": SETTINGS.retro_scope_version,
+        "last_settled_epoch": rows[-1]["betting_epoch"],
+        "strategy_started_at": data.get("first_decision_timestamp"),
+        "first_retro_trade_epoch": rows[0]["betting_epoch"],
+        "last_retro_trade_epoch": rows[-1]["betting_epoch"],
+    }
+    return rows, metrics
+
+
+def _unused_legacy_retro_replay(cutoff_epoch: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     # IMPORTANT: dashboard history is reconstructed ONLY from the historical
     # v1.3.6.6 slice (or RETRO_SCOPE_VERSION), never from ALL_VERSIONS.
     rows = _base_rows(cutoff_epoch, SETTINGS.retro_scope_version)
