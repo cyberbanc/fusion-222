@@ -3,15 +3,19 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import os
+import secrets
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional
 
-from fastapi import FastAPI, Query, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Response
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import db
+from . import paper_export
 from .config import SETTINGS
 from .pancake_client import from_env
 from .shadow import summarize
@@ -20,6 +24,7 @@ from .worker import bootstrap_rounds, loop, signal_cache, status as worker_statu
 _STOP: Optional[asyncio.Event] = None
 _TASK: Optional[asyncio.Task] = None
 _BUILD_REVISION = "fusion-222-v1.0.5-no-breaker-v1366-only"
+_EXPORT_BASIC = HTTPBasic(auto_error=False)
 
 
 def _json_safe(value: Any) -> Any:
@@ -276,6 +281,26 @@ def export_retro():
 @app.get("/history/export-live.csv")
 def export_live():
     return _csv_response(db.history(SETTINGS.history_api_max_limit, 0), "fusion_222_history_LIVE.csv")
+
+
+@app.get("/exports/paper-history.zip")
+def export_paper_history(credentials: HTTPBasicCredentials | None = Depends(_EXPORT_BASIC)):
+    """Download PAPER source tables for offline replay; requires Railway-only password."""
+    password = os.getenv("PAPER_EXPORT_PASSWORD", "").strip()
+    if len(password) < 20:
+        raise HTTPException(status_code=503, detail="PAPER export is not configured")
+    if (credentials is None
+            or not secrets.compare_digest(credentials.username, "export")
+            or not secrets.compare_digest(credentials.password, password)):
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={
+                "WWW-Authenticate": 'Basic realm="FUSION-222 PAPER export"',
+                "Cache-Control": "no-store",
+            },
+        )
+    return paper_export.archive()
 
 
 @app.get("/shadow/performance")
