@@ -12,6 +12,7 @@ from fastapi import FastAPI, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import db
+from . import paper_export
 from .config import SETTINGS
 from .pancake_client import from_env
 from .shadow import summarize
@@ -276,6 +277,12 @@ def export_retro():
 @app.get("/history/export-live.csv")
 def export_live():
     return _csv_response(db.history(SETTINGS.history_api_max_limit, 0), "fusion_222_history_LIVE.csv")
+
+
+@app.get("/exports/paper-history.zip")
+def export_paper_history():
+    """Download the public PAPER-only archive for offline replay."""
+    return paper_export.archive()
 
 
 @app.get("/shadow/performance")

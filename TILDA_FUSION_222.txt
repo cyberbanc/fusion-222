@@ -1,6 +1,6 @@
 <!--
 TILDA T123 — FUSION-222
-Default API: https://fusion-222-production.up.railway.app
+Default API: https://fusion-222.up.railway.app
 
 Main dashboard metrics = retro replay of strategy_version 1.3.6.6 ONLY under FUSION-222 + new live FUSION-222 paper trades.
 Timer anchor = first stored v1.3.6.6 decision.
@@ -30,6 +30,7 @@ Timer anchor = first stored v1.3.6.6 decision.
       <a id="f222-csv-combined" class="f222-button" href="#" target="_blank">CSV COMBINED</a>
       <a id="f222-csv-retro" class="f222-button" href="#" target="_blank">CSV RETRO</a>
       <a id="f222-csv-live" class="f222-button" href="#" target="_blank">CSV LIVE</a>
+      <a class="f222-button" href="https://fusion-222.up.railway.app/exports/paper-history.zip" target="_blank" rel="noopener" title="Скачать архив истории PAPER для сравнения стратегий">Скачать данные для бэктеста (ZIP)</a>
     </div>
   </div>
 
@@ -91,7 +92,7 @@ Timer anchor = first stored v1.3.6.6 decision.
 </div>
 <script>
 (function(){
-const API_BASE="https://fusion-222-production.up.railway.app";
+const API_BASE="https://fusion-222.up.railway.app";
 const REFRESH_MS=4000;
 const $=id=>document.getElementById(id);
 let busy=false,startedAtMs=null,serverUptimeAtSync=0,localSyncMs=Date.now();
