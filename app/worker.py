@@ -302,6 +302,7 @@ def tick() -> dict[str, Any]:
             "min_trade_ev": SETTINGS.min_trade_ev,
             "min_signal_probability": SETTINGS.min_signal_probability,
             "settled_now": settled,
+            "bank": state.get("bank"),
             "sync": sync,
             "rpc": client.rpc_status(),
             "created_or_existing_decision": created,
@@ -357,10 +358,15 @@ def status() -> dict[str, Any]:
 
 
 async def loop(stop: asyncio.Event) -> None:
+    first_tick = True
     while not stop.is_set():
         try:
-            await asyncio.to_thread(tick)
+            result = await asyncio.to_thread(tick)
+            if first_tick or result.get("created_or_existing_decision") or result.get("settled_now"):
+                print(f"UP-ONLY-WORKER ok={result.get('ok')} epoch={result.get('betting_epoch')} signal={result.get('decision_signal')} trade={result.get('trade_executed')} bank={result.get('bank')}", flush=True)
+            first_tick = False
         except Exception as exc:
+            print(f"UP-ONLY-WORKER-ERROR type={type(exc).__name__}", flush=True)
             error_result = {
                 "ok": False,
                 "message": "tick_error",
