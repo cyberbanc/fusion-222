@@ -1,9 +1,8 @@
-"""Password-protected, read-only archive of PAPER backtest inputs."""
+"""Read-only archive of PAPER backtest inputs."""
 
 from __future__ import annotations
 
 import json
-import os
 import re
 import tempfile
 import zipfile
@@ -46,9 +45,6 @@ def _chunks(file):
 
 def archive():
     """Create a consistent database snapshot without materializing rows in RAM."""
-    if len(os.getenv("PAPER_EXPORT_PASSWORD", "").strip()) < 20:
-        raise HTTPException(status_code=503, detail="PAPER export is not configured")
-
     tmp = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
     try:
         with db.conn() as connection:
