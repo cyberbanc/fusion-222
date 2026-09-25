@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
     global _STOP, _TASK
     db.init_db()
     state = db.get_state()
-    print(f"UP-ONLY-STARTUP bank={state.get('bank')} cutoff={state.get('retro_cutoff_epoch')} retro_trades={state.get('retro_trades_count')} tables={db.table_names()}", flush=True)
+    print(f"UP-ONLY-STARTUP bank={state.get('bank')} cutoff={state.get('retro_cutoff_epoch')} retro_trades={state.get('retro_trades_count')} scope={state.get('retro_scope_version')} initialized={state.get('retro_initialized')} replay_setting={SETTINGS.retro_replay_enabled} tables={db.table_names()}", flush=True)
     try:
         await asyncio.wait_for(asyncio.to_thread(bootstrap_rounds, from_env()), timeout=45)
     except Exception:

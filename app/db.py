@@ -471,8 +471,9 @@ def init_db() -> None:
         )
         c.commit()
 
-    if SETTINGS.retro_replay_enabled:
-        initialize_retro_state()
+    # This service always starts from its immutable all-history UP-only replay.
+    # Skipping this step would silently start a second $500 bank.
+    initialize_retro_state()
 
 
 def ping() -> bool:
@@ -785,7 +786,7 @@ def initialize_retro_state() -> None:
     with _LOCK, conn() as c, c.cursor(cursor_factory=RealDictCursor) as cur:
         state = get_state(for_update=True, cursor=cur)
         scope_ok = str(state.get("retro_scope_version") or "") == SETTINGS.retro_scope_version
-        if bool(state.get("retro_initialized")) and scope_ok:
+        if bool(state.get("retro_initialized")) and scope_ok and int(state.get("retro_trades_count") or 0) == 291:
             c.commit()
             return
         # Corrected FUSION-222 uses dedicated v1.3.6.6 private tables. If an
@@ -797,6 +798,9 @@ def initialize_retro_state() -> None:
             sql.SQL("SELECT COUNT(*) AS live_trades FROM {} WHERE COALESCE(settled,FALSE)=TRUE AND COALESCE(trade_executed,FALSE)=TRUE").format(_ident(_DECISIONS_TABLE))
         )
         live_trades = int(_first_scalar(cur.fetchone(), key="live_trades", default=0) or 0)
+        if live_trades and not bool(state.get("retro_initialized")):
+            c.rollback()
+            raise RuntimeError(f"Cannot seed UP-only bank over {live_trades} already settled live trades; reconcile first")
         if bool(state.get("retro_initialized")) and not scope_ok and live_trades > 0:
             c.rollback()
             raise RuntimeError(
@@ -813,7 +817,7 @@ def initialize_retro_state() -> None:
     with _LOCK, conn() as c, c.cursor(cursor_factory=RealDictCursor) as cur:
         state = get_state(for_update=True, cursor=cur)
         scope_ok = str(state.get("retro_scope_version") or "") == SETTINGS.retro_scope_version
-        if bool(state.get("retro_initialized")) and scope_ok:
+        if bool(state.get("retro_initialized")) and scope_ok and int(state.get("retro_trades_count") or 0) == 291:
             c.commit()
             return
         cur.execute(
