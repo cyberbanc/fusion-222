@@ -50,10 +50,43 @@ class TradingTests(unittest.TestCase):
             self.assertLessEqual(p['risk_usd'],5.001)
             self.assertLessEqual(p['margin_usd'],450.001)
 
+    def test_fixed_22_notional_independent_of_bank_and_stop(self):
+        s=snapshot()
+        risks=[]
+        for side in ['LONG','SHORT']:
+            for bank in [100,500,1000]:
+                for atr in [.2,.8]:
+                    p=make_position(s,{'atr':atr,'score':.2},side,None,bank)
+                    self.assertEqual(p['position_sizing'],'FIXED_NOTIONAL')
+                    self.assertEqual(p['requested_notional_usd'],22)
+                    self.assertLessEqual(p['notional_usd'],22+1e-9)
+                    self.assertGreater(p['notional_usd'],21.8)
+                    risks.append(p['risk_usd'])
+        self.assertGreater(max(risks),min(risks)*2)
+
+    def test_fixed_notional_never_rounds_up_to_minimum_contract(self):
+        s=snapshot();s['instrument'].update(lotSz='1',minSz='1')
+        with self.assertRaisesRegex(ValueError,'MIN_CONTRACT_SIZE'):
+            make_position(s,{'atr':.4,'score':.2},'LONG',None,500)
+        with self.assertRaisesRegex(ValueError,'INSUFFICIENT_MARGIN'):
+            make_position(snapshot(),{'atr':.4,'score':.2},'LONG',None,5)
+
+    def test_shadow_risk_remains_normalized(self):
+        p=make_position(snapshot(),{'atr':.4,'score':.2},'SHORT',1,500,trial=True)
+        self.assertEqual(p['position_sizing'],'SHADOW_FIXED_RISK')
+        self.assertAlmostEqual(p['risk_usd'],1,places=10)
+
     def test_no_old_direction_probability_substituted(self):
         result=calibrate([], 'LONG', .9)
         self.assertFalse(result['ready'])
         self.assertEqual(result['probability'],.25)
+
+    def test_calibration_requires_15_closed_trials_per_direction(self):
+        rows=[{'side':'LONG','exit_reason':'TAKE_PROFIT','score':.2,
+            'pnl_r':3,'exit_ts':100+i} for i in range(15)]
+        self.assertFalse(calibrate(rows[:14],'LONG',.2)['ready'])
+        self.assertTrue(calibrate(rows,'LONG',.2)['ready'])
+        self.assertFalse(calibrate(rows,'SHORT',.2)['ready'])
 
     def test_entry_partial_minute_not_replayed_with_past_extremes(self):
         s=snapshot();p=make_position(s,{'atr':.4,'score':.2},'LONG',5,500)

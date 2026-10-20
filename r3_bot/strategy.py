@@ -132,22 +132,30 @@ def make_position(s,f,side,risk,bank,trial=False):
     ct=float(s['instrument']['ctVal']);lot=float(s['instrument'].get('lotSz') or 1)
     quote=float(s['book']['asks'][0][0] if side=='LONG' else s['book']['bids'][0][0])
     entry=quote*(1+sign*slip);distance=C['stop_atr']*f['atr']
-    qty=0
-    for _ in range(3):
-        stop=entry-sign*distance
-        stop_exec=stop*(1-sign*slip)
+    target=None
+    if trial:
+        stop_exec=(entry-sign*distance)*(1-sign*slip)
         per_loss=sign*(entry-stop_exec)+fee*(entry+stop_exec)
         qty=risk/per_loss
-        if not trial:
-            qty=min(qty,bank*.90*C['max_leverage']/entry)
-            qty=math.floor(qty/ct/lot)*ct*lot
-            if qty<float(s['instrument'].get('minSz') or lot)*ct:raise ValueError('MIN_CONTRACT_SIZE')
+    else:
+        target=C['fixed_notional_usd']
+        if target<=0:raise ValueError('Invalid fixed notional')
+        if target/C['max_leverage']+target*fee>bank*.90:
+            raise ValueError('INSUFFICIENT_MARGIN')
+        step=ct*lot;minimum=float(s['instrument'].get('minSz') or lot)*ct
+        qty=math.floor(target/entry/step+1e-12)*step
+        for _ in range(8):
+            if qty<minimum-1e-12:raise ValueError('MIN_CONTRACT_SIZE')
             fill=vwap(s['book'],side,qty,ct)
             if abs(fill/quote-1)>C['max_vwap_impact']:raise ValueError('INSUFFICIENT_BOOK_DEPTH')
             entry=fill*(1+sign*slip)
+            if qty*entry<=target+1e-9:break
+            steps=max(1,math.ceil((qty*entry-target)/entry/step))
+            qty-=steps*step
+        if qty*entry>target+1e-9:raise ValueError('FIXED_NOTIONAL_LIMIT')
     stop=entry-sign*distance;stop_exec=stop*(1-sign*slip)
     planned_loss=qty*(sign*(entry-stop_exec)+fee*(entry+stop_exec))
-    if planned_loss>risk*1.001:raise ValueError('INSUFFICIENT_MARGIN')
+    if trial and planned_loss>risk*1.001:raise ValueError('INSUFFICIENT_MARGIN')
     if side=='LONG':take=(entry*(1+fee)+3*planned_loss/qty)/((1-slip)*(1-fee))
     else:take=(entry*(1-fee)-3*planned_loss/qty)/((1+slip)*(1+fee))
     if stop<=0 or take<=0:raise ValueError('Invalid stop/target')
@@ -155,6 +163,8 @@ def make_position(s,f,side,risk,bank,trial=False):
         'entry_ts':s['ts'],'created_ts':s['ts'],'entry_price':entry,'quantity':qty,
         'stop_price':stop,'take_price':take,'risk_usd':planned_loss,
         'planned_reward_usd':3*planned_loss,'notional_usd':qty*entry,
+        'position_sizing':'SHADOW_FIXED_RISK' if trial else 'FIXED_NOTIONAL',
+        'requested_notional_usd':target,
         'margin_usd':qty*entry/C['max_leverage'],'leverage':C['max_leverage'],
         'entry_fee':qty*entry*fee,'funding_usd':0.0,'funding_events':[],
         'expires_ts':s['ts']//60*60+C['max_hold_seconds'],'last_minute':s['ts']//60*60,

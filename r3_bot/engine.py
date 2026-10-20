@@ -220,10 +220,12 @@ class Engine:
                     'probability':selected['probability'],'ev_r':selected['ev_r'],
                     'calibration_samples':selected['samples'],'calibration_ready':selected['ready'],
                     'calibration':cal,'quality':q,'features':f,'source_key':signal_key,
-                    'executed':False,'version':C['version'],'mode':'PAPER'}
+                    'executed':False,'version':C['version'],'mode':'PAPER',
+                    'position_sizing':C['position_sizing'],
+                    'requested_notional_usd':C['fixed_notional_usd']}
                 if account_reason=='ALLOWED':
                     try:
-                        p=make_position(s,f,side,a['bank']*C['risk_fraction'],a['bank'])
+                        p=make_position(s,f,side,None,a['bank'])
                         p.update(id=account_id+':'+str(f['candle_ts']),account_id=account_id,
                             candle_ts=f['candle_ts'],signal_key=signal_key,timeframe_minutes=timeframe)
                         self.store.put('position',p['id'],p)

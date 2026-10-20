@@ -2,11 +2,11 @@
 
 Independent branch/service for public OKX USDT perpetual market data and simulated execution. It has no exchange order endpoint, exchange account credentials, or wallet signing code.
 
-24 independent $500 virtual accounts: SOL/ETH × 5/15/30/60 minutes × long-only/long+short/short-only. Risk is at most 1% of settled bank, leverage cap 2, initial stop 1.5 ATR(14), target net 3R before future funding, maximum holding approximately 4 hours. Trading fee assumption 0.05% each side, adverse slippage 0.01% each side. Actual published funding rates are included with a minute-close notional approximation.
+24 independent $500 virtual accounts: SOL/ETH × 5/15/30/60 minutes × long-only/long+short/short-only. From v1.1, paper positions target fixed $22 notional regardless of bank size, rounded down to the exchange contract step. Planned stop risk varies with ATR and costs. Leverage cap 2, initial stop 1.5 ATR(14), target net 3R before future funding, maximum holding approximately 4 hours. Trading fee assumption 0.05% each side, adverse slippage 0.01% each side. Actual published funding rates are included with a minute-close notional approximation. Shadow trials retain normalized $1 stop risk; past records are preserved unchanged.
 
 Signals use weighted price / microstructure / crowd blocks 40/25/35 and shrink 0.75. The crowd block uses account long/short ratio, funding and changes in open interest. It is not a capital pool probability.
 
-The probability of TP before SL/timeout is learned only from completed live shadow trials at the same symbol and timeframe with nearby weighted scores. A 25% prior, 30-sample warmup, p>=53%, EV>=0.02R, recent Shadow -3R/8 and quality PF>=0.85 are explicit. Warmup is visible. No old up/down probability or fabricated historical microstructure is labelled as a TP probability.
+The probability of TP before SL/timeout is learned only from completed live shadow trials at the same symbol and timeframe with nearby weighted scores. A 25% prior, 15-sample warmup per direction, p>=53%, EV>=0.02R, recent Shadow -3R/8 and quality PF>=0.85 are explicit. Warmup is visible. No old up/down probability or fabricated historical microstructure is labelled as a TP probability.
 
 Full history is stored exclusively in `fusion_r3_v1_records` and four indexes with the `fusion_r3_` prefix. Existing PancakeSwap tables and histories are not modified. PostgreSQL session advisory lock prevents concurrent workers. All writes for a source tick are transactional; signal keys make decisions idempotent.
 
@@ -21,6 +21,6 @@ Every actual paper entry has 16 parallel exit studies: TP=1.5/2/2.5/3R × SL=.75
 
 Confirmed MFE/MAE, observed milestones, price progress toward TP, possible candle bounds, and 80%-to-TP reversals are separate fields. If a minute contains both barriers, stop is assumed first. The closing minute's other extremes are marked ambiguous rather than assumed to occur before exit. The entry minute uses only observed quotes. During outages complete minute candles are paginated back; gaps freeze causal replay and new account entries.
 
-Environment: `DATABASE_URL`, `TRADING_MODE=PAPER`, `WORKER_ENABLED=true`, `ALLOWED_ORIGIN`, `POLL_SECONDS=20`. No private keys are needed or read.
+Environment: `DATABASE_URL`, `TRADING_MODE=PAPER`, `WORKER_ENABLED=true`, `ALLOWED_ORIGIN`, `POLL_SECONDS=20`, `FIXED_POSITION_NOTIONAL_USD=22`, `MODEL_VERSION=FUSION-R3-v1.1.0`. No private keys are needed or read.
 
 Run `python -m unittest discover -s tests -v` and `python -m r3_bot`. Docker installs psycopg only; all other runtime modules are Python standard library.
