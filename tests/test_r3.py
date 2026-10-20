@@ -2,6 +2,7 @@ import copy
 import io
 import json
 import unittest
+from unittest.mock import Mock
 import zipfile
 from r3_bot.storage import Store
 from r3_bot.config import CONFIG as C
@@ -19,6 +20,17 @@ def snapshot():
 
 
 class TradingTests(unittest.TestCase):
+    def test_worker_resumes_after_rolling_deployment_lock_handoff(self):
+        store=Store(':memory:');engine=Engine(store,None)
+        store.acquire_worker=Mock(side_effect=[False,False,True])
+        engine.stop.wait=Mock(return_value=False)
+        def once():
+            self.assertGreaterEqual(store.acquire_worker.call_count,3)
+            engine.stop.set()
+        engine.once=Mock(side_effect=once)
+        engine.run()
+        engine.once.assert_called_once()
+
     def test_24_independent_modes(self):
         store=Store(':memory:');Engine(store,None)
         accounts=store.rows('account',limit=None)

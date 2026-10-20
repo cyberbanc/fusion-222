@@ -272,9 +272,13 @@ class Engine:
         return errors
 
     def run(self):
-        if not self.store.acquire_worker():
-            self.store.event('INFO','Другой экземпляр уже выполняет обработку рынка')
-            return
+        waiting_logged=False
+        while not self.stop.is_set():
+            if self.store.acquire_worker():break
+            if not waiting_logged:
+                self.store.event('INFO','Ожидание передачи обработки рынка от предыдущего экземпляра')
+                waiting_logged=True
+            self.stop.wait(5)
         while not self.stop.is_set():
             try:self.once()
             except Exception as exc:
