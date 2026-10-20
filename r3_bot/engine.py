@@ -74,6 +74,12 @@ class Engine:
             if not store.get('meta','started'):
                 store.put('meta','started',{'ts':now,'started_ts':now})
             store.put('meta','config',C)
+            for old in store.rows('account',limit=None):
+                if old['account_id'] not in C['accounts'] and old.get('direction_mode')=='TREND':
+                    if not old.get('retired_ts'):
+                        old.update(active=False,retired_ts=now,status='ARCHIVED',
+                            retirement_note='Trend scoring moved to a separate service; history preserved.')
+                        store.put('account',old['account_id'],old)
             for key in C['accounts']:
                 if store.get('account',key):continue
                 symbol,tf,mode=key.split('_')
@@ -161,7 +167,6 @@ class Engine:
                 self.store.put('meta',f'last_tf_{symbol}_{tf}',{'ts':int(bars[-1][0])//1000})
             for tf,f in all_features.items():
                 self.decide(s,f,tf)
-                self.decide(s,f,tf,profile='TREND')
 
     def decide(self,s,f,timeframe,profile='CLASSIC'):
             now=s['ts'];symbol=s['symbol']

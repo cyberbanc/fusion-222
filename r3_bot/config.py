@@ -3,10 +3,10 @@ import os
 TARGET_NET_PROFIT=float(os.getenv('TARGET_NET_PROFIT_USD','22'))
 
 CONFIG = {
-    'version': os.getenv('MODEL_VERSION', 'FUSION-R3-v1.3.0'),
+    'version': os.getenv('MODEL_VERSION', 'FUSION-R3-v1.3.1'),
     'mode': 'PAPER', 'source': 'OKX public USDT perpetuals',
     'symbols': ['SOL', 'ETH'], 'timeframes_minutes': [5, 15, 30, 60],
-    'accounts': [f'{symbol}_{tf}_{mode}' for symbol in ['SOL','ETH'] for tf in [5,15,30,60] for mode in ['LONG','BOTH','SHORT','TREND']],
+    'accounts': [f'{symbol}_{tf}_{mode}' for symbol in ['SOL','ETH'] for tf in [5,15,30,60] for mode in ['LONG','BOTH','SHORT']],
     'trend_rules': {'method':'EMA_ADX_DONCHIAN_v1','ema_fast':20,'ema_slow':50,
         'adx_period':14,'trend_adx_min':25,'flat_adx_max':20,'slope_bars':5,
         'min_slope_atr':.05,'channel_bars':20,'breakout_buffer_atr':.1,
@@ -35,7 +35,7 @@ CONFIG = {
     'max_ratio_age_seconds': 1200,
     'data_gap_policy': 'No new positions while source is incomplete/stale. Backfill minute candles; stop first if both barriers touch in a minute.',
     'calibration_note': 'Estimate TP-before-SL-or-timeout probability only from already closed live shadow trials with similar weighted score. No historical book or crowd data is fabricated.',
-    'bank_note': '32 independent virtual accounts: 24 classic and 8 trend/breakout accounts. New trend accounts start at $500 on activation; old history is preserved. No aggregate bank is implied.',
+    'bank_note': '24 active independent classic accounts. The earlier 8 TREND accounts are retired, retained in the full export, and do not receive new entries. Trend scoring now runs in a separate service with a separate history. No aggregate bank is implied.',
     'study_targets_r': [1.5, 2.0, 2.5, 3.0],
     'study_stops_r': [.75, 1.0, 1.25, 1.5],
     'study_note': 'Same actual entries and quantities, alternative net TP/SL barriers. Studies continue to original 4-hour horizon after main exit. This is exit analysis, not a full independent strategy backtest.',
@@ -66,4 +66,5 @@ REASONS = {
     'TREND_FLAT_WAIT_BREAKOUT': 'Флэт: ждём закрытия свечи за границей канала',
     'TREND_NOT_CONFIRMED': 'Переходный режим: направление тренда не подтверждено',
     'TREND_HISTORY_WARMUP': 'Недостаточно закрытых свечей для определения тренда',
+    'ARCHIVED': 'Архивный вариант: новые входы отключены',
 }

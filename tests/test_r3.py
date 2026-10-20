@@ -32,14 +32,36 @@ class TradingTests(unittest.TestCase):
         engine.run()
         engine.once.assert_called_once()
 
-    def test_32_independent_modes(self):
+    def test_24_independent_classic_modes(self):
         store=Store(':memory:');Engine(store,None)
         accounts=store.rows('account',limit=None)
-        self.assertEqual(len(accounts),32)
-        self.assertEqual({a['direction_mode'] for a in accounts},{'LONG','BOTH','SHORT','TREND'})
-        self.assertEqual(sum(a['direction_mode']=='TREND' for a in accounts),8)
+        self.assertEqual(len(accounts),24)
+        self.assertEqual({a['direction_mode'] for a in accounts},{'LONG','BOTH','SHORT'})
+        self.assertEqual(sum(a['direction_mode']=='TREND' for a in accounts),0)
         self.assertEqual({a['timeframe_minutes'] for a in accounts},{5,15,30,60})
         self.assertTrue(all(a['bank']==500 for a in accounts))
+
+    def test_retired_trend_accounts_hidden_but_history_preserved(self):
+        from r3_bot.server import summary
+        store=Store(':memory:');Engine(store,None)
+        base=store.get('account','SOL_15_LONG')
+        for symbol in ['SOL','ETH']:
+            for tf in [5,15,30,60]:
+                key=f'{symbol}_{tf}_TREND';a=copy.deepcopy(base)
+                a.update(account_id=key,symbol=symbol,timeframe_minutes=tf,direction_mode='TREND',bank=487.25,equity=487.25)
+                store.put('account',key,a)
+                store.put('decision',key+':old',{'account_id':key,'created_ts':123,'executed':False})
+        Engine(store,None)
+        result=summary(store)
+        self.assertEqual(len(result['accounts']),24)
+        self.assertEqual(result['archived_account_count'],8)
+        for a in store.rows('account',limit=None):
+            if a['direction_mode']=='TREND':
+                self.assertFalse(a['active']);self.assertEqual(a['status'],'ARCHIVED')
+                self.assertEqual(a['bank'],487.25)
+        archive,counts=history_archive(store)
+        self.assertEqual(counts['account'],32);self.assertEqual(counts['decision'],8)
+        archive.close()
 
     def test_net_three_to_one_in_both_directions(self):
         s=snapshot()
@@ -172,7 +194,7 @@ class TradingTests(unittest.TestCase):
         with zipfile.ZipFile(archive) as z:
             self.assertIsNone(z.testzip())
             self.assertEqual(len(z.read('decision.jsonl').splitlines()),321)
-            self.assertEqual(json.loads(z.read('manifest.json'))['counts']['account'],32)
+            self.assertEqual(json.loads(z.read('manifest.json'))['counts']['account'],24)
         archive.close()
 
 
@@ -184,6 +206,13 @@ def trend_snapshot(closes,tf=15):
 
 
 class TrendTests(unittest.TestCase):
+    def setUp(self):
+        # Legacy profile remains replayable in tests; production config is 24 classics.
+        from r3_bot.config import CONFIG
+        keys=CONFIG['accounts']+[f'{s}_{tf}_TREND' for s in ['SOL','ETH'] for tf in [5,15,30,60]]
+        self.config_patch=patch.dict(CONFIG,{'accounts':keys});self.config_patch.start()
+
+    def tearDown(self):self.config_patch.stop()
     def test_monotonic_up_down_have_dmi_direction_and_adx_strength(self):
         for sign,side,state in [(1,'LONG','UP'),(-1,'SHORT','DOWN')]:
             s=trend_snapshot([200+sign*i*.5 for i in range(100)])
