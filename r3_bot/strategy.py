@@ -132,39 +132,47 @@ def make_position(s,f,side,risk,bank,trial=False):
     ct=float(s['instrument']['ctVal']);lot=float(s['instrument'].get('lotSz') or 1)
     quote=float(s['book']['asks'][0][0] if side=='LONG' else s['book']['bids'][0][0])
     entry=quote*(1+sign*slip);distance=C['stop_atr']*f['atr']
-    target=None
+    cash_risk=risk if trial else C['planned_stop_loss_usd']
+    if not cash_risk or cash_risk<=0:raise ValueError('Invalid planned cash risk')
+    stop_exec=(entry-sign*distance)*(1-sign*slip)
+    per_loss=sign*(entry-stop_exec)+fee*(entry+stop_exec)
+    if per_loss<=0:raise ValueError('Invalid stop risk')
     if trial:
-        stop_exec=(entry-sign*distance)*(1-sign*slip)
-        per_loss=sign*(entry-stop_exec)+fee*(entry+stop_exec)
-        qty=risk/per_loss
+        qty=cash_risk/per_loss
     else:
-        target=C['fixed_notional_usd']
-        if target<=0:raise ValueError('Invalid fixed notional')
-        if target/C['max_leverage']+target*fee>bank*.90:
-            raise ValueError('INSUFFICIENT_MARGIN')
         step=ct*lot;minimum=float(s['instrument'].get('minSz') or lot)*ct
-        qty=math.floor(target/entry/step+1e-12)*step
+        qty=math.floor(cash_risk/per_loss/step+1e-12)*step
         for _ in range(8):
             if qty<minimum-1e-12:raise ValueError('MIN_CONTRACT_SIZE')
             fill=vwap(s['book'],side,qty,ct)
             if abs(fill/quote-1)>C['max_vwap_impact']:raise ValueError('INSUFFICIENT_BOOK_DEPTH')
             entry=fill*(1+sign*slip)
-            if qty*entry<=target+1e-9:break
-            steps=max(1,math.ceil((qty*entry-target)/entry/step))
-            qty-=steps*step
-        if qty*entry>target+1e-9:raise ValueError('FIXED_NOTIONAL_LIMIT')
+            stop_exec=(entry-sign*distance)*(1-sign*slip)
+            per_loss=sign*(entry-stop_exec)+fee*(entry+stop_exec)
+            if qty*per_loss<=cash_risk+1e-9:break
+            qty=min(qty-step,math.floor(cash_risk/per_loss/step)*step)
+        else:raise ValueError('Invalid cash sizing convergence')
+        if qty*entry/C['max_leverage']+qty*entry*fee>bank*.90:
+            raise ValueError('CASH_TARGET_LEVERAGE_LIMIT')
     stop=entry-sign*distance;stop_exec=stop*(1-sign*slip)
-    planned_loss=qty*(sign*(entry-stop_exec)+fee*(entry+stop_exec))
-    if trial and planned_loss>risk*1.001:raise ValueError('INSUFFICIENT_MARGIN')
-    if side=='LONG':take=(entry*(1+fee)+3*planned_loss/qty)/((1-slip)*(1-fee))
-    else:take=(entry*(1-fee)-3*planned_loss/qty)/((1+slip)*(1+fee))
+    atr_stop=stop
+    planned_loss=cash_risk
+    reward=3*cash_risk if trial else C['target_net_profit_usd']
+    if side=='LONG':
+        stop=(entry*(1+fee)-planned_loss/qty)/((1-slip)*(1-fee))
+        take=(entry*(1+fee)+reward/qty)/((1-slip)*(1-fee))
+    else:
+        stop=(entry*(1-fee)+planned_loss/qty)/((1+slip)*(1+fee))
+        take=(entry*(1-fee)-reward/qty)/((1+slip)*(1+fee))
     if stop<=0 or take<=0:raise ValueError('Invalid stop/target')
     return {'symbol':s['symbol'],'instrument_id':s['instrument_id'],'side':side,
         'entry_ts':s['ts'],'created_ts':s['ts'],'entry_price':entry,'quantity':qty,
         'stop_price':stop,'take_price':take,'risk_usd':planned_loss,
-        'planned_reward_usd':3*planned_loss,'notional_usd':qty*entry,
-        'position_sizing':'SHADOW_FIXED_RISK' if trial else 'FIXED_NOTIONAL',
-        'requested_notional_usd':target,
+        'planned_reward_usd':reward,'notional_usd':qty*entry,
+        'position_sizing':'SHADOW_FIXED_RISK' if trial else 'FIXED_CASH_TARGET',
+        'requested_notional_usd':None,'requested_stop_loss_usd':cash_risk,
+        'target_net_profit_usd':reward,'reference_stake_usd':None if trial else C['reference_stake_usd'],
+        'atr_stop_price':atr_stop,'stop_atr_multiple':abs(entry-stop)/f['atr'],
         'margin_usd':qty*entry/C['max_leverage'],'leverage':C['max_leverage'],
         'entry_fee':qty*entry*fee,'funding_usd':0.0,'funding_events':[],
         'expires_ts':s['ts']//60*60+C['max_hold_seconds'],'last_minute':s['ts']//60*60,

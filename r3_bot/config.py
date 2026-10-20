@@ -1,14 +1,18 @@
 import os
 
+TARGET_NET_PROFIT=float(os.getenv('TARGET_NET_PROFIT_USD','22'))
+
 CONFIG = {
-    'version': os.getenv('MODEL_VERSION', 'FUSION-R3-v1.1.0'),
+    'version': os.getenv('MODEL_VERSION', 'FUSION-R3-v1.2.0'),
     'mode': 'PAPER', 'source': 'OKX public USDT perpetuals',
     'symbols': ['SOL', 'ETH'], 'timeframes_minutes': [5, 15, 30, 60],
     'accounts': [f'{symbol}_{tf}_{mode}' for symbol in ['SOL','ETH'] for tf in [5,15,30,60] for mode in ['LONG','BOTH','SHORT']],
     'initial_bank': float(os.getenv('INITIAL_BANK', '500')),
-    'position_sizing': 'FIXED_NOTIONAL',
-    'fixed_notional_usd': float(os.getenv('FIXED_POSITION_NOTIONAL_USD', '22')),
-    'sizing_note': 'Paper positions target $22 notional, rounded down to the exchange contract step. Stop risk varies with ATR and modeled costs. Shadow trials retain $1 normalized risk for calibration.',
+    'position_sizing': 'FIXED_CASH_TARGET',
+    'reference_stake_usd': 22.0,
+    'target_net_profit_usd': TARGET_NET_PROFIT,
+    'planned_stop_loss_usd': TARGET_NET_PROFIT/3,
+    'sizing_note': 'New paper entries target +$22 after modeled trading fees/slippage and plan -$7.3333 at the stop before future funding. Quantity is derived from 1.5 ATR and rounded down; the stop is adjusted for that rounding to retain the dollar risk. Margin and entry fees must fit 90% of bank at the existing leverage cap. Legacy positions keep their entry settings. Actual exits can differ due to funding, gaps or polling slippage.',
     'max_leverage': float(os.getenv('MAX_LEVERAGE', '2')),
     'net_reward_risk': 3.0, 'stop_atr': 1.5, 'atr_period': 14,
     'max_hold_seconds': 14400,
@@ -49,6 +53,7 @@ REASONS = {
     'SPREAD_TOO_WIDE': 'Слишком широкий спред',
     'INSUFFICIENT_BOOK_DEPTH': 'Недостаточная глубина стакана',
     'INSUFFICIENT_MARGIN': 'Недостаточно средств для модельного залога',
+    'CASH_TARGET_LEVERAGE_LIMIT': 'Для цели +$22 нужен больший объём, чем допускают банк и лимит плеча',
     'STALE_MARKET_DATA': 'Рыночные данные устарели',
     'SOURCE_INCOMPLETE': 'Ожидание полного набора рыночных данных',
     'MIN_CONTRACT_SIZE': 'Размер меньше минимального контракта',

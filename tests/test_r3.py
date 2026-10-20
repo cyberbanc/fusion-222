@@ -2,7 +2,7 @@ import copy
 import io
 import json
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock,patch
 import zipfile
 from r3_bot.storage import Store
 from r3_bot.config import CONFIG as C
@@ -42,37 +42,71 @@ class TradingTests(unittest.TestCase):
     def test_net_three_to_one_in_both_directions(self):
         s=snapshot()
         for side in ['LONG','SHORT']:
-            p=make_position(s,{'atr':.4,'score':.2},side,5,500)
+            p=make_position(s,{'atr':.8,'score':.2},side,5,500)
             loss=close_position(p,p['entry_ts']+60,p['stop_price'],'STOP_LOSS')
             win=close_position(p,p['entry_ts']+60,p['take_price'],'TAKE_PROFIT')
             self.assertAlmostEqual(loss['pnl_r'],-1,places=10)
             self.assertAlmostEqual(win['pnl_r'],3,places=10)
-            self.assertLessEqual(p['risk_usd'],5.001)
+            self.assertAlmostEqual(loss['pnl'],-22/3,places=9)
+            self.assertAlmostEqual(win['pnl'],22,places=9)
             self.assertLessEqual(p['margin_usd'],450.001)
 
-    def test_fixed_22_notional_independent_of_bank_and_stop(self):
+    def test_cash_target_independent_of_bank_and_atr(self):
         s=snapshot()
-        risks=[]
+        notionals=[]
         for side in ['LONG','SHORT']:
-            for bank in [100,500,1000]:
-                for atr in [.2,.8]:
+            for bank in [500,1000,2000]:
+                for atr in [.8,1.2]:
                     p=make_position(s,{'atr':atr,'score':.2},side,None,bank)
-                    self.assertEqual(p['position_sizing'],'FIXED_NOTIONAL')
-                    self.assertEqual(p['requested_notional_usd'],22)
-                    self.assertLessEqual(p['notional_usd'],22+1e-9)
-                    self.assertGreater(p['notional_usd'],21.8)
-                    risks.append(p['risk_usd'])
-        self.assertGreater(max(risks),min(risks)*2)
+                    self.assertEqual(p['position_sizing'],'FIXED_CASH_TARGET')
+                    self.assertAlmostEqual(p['risk_usd'],22/3,places=10)
+                    self.assertEqual(p['planned_reward_usd'],22)
+                    self.assertAlmostEqual(net_at_price(p,p['stop_price']),-1,places=10)
+                    self.assertAlmostEqual(net_at_price(p,p['take_price']),3,places=10)
+                    notionals.append(p['notional_usd'])
+        self.assertGreater(max(notionals),min(notionals)*1.3)
 
-    def test_fixed_notional_never_rounds_up_to_minimum_contract(self):
-        s=snapshot();s['instrument'].update(lotSz='1',minSz='1')
+    def test_cash_target_never_silently_reduced_to_fit_margin(self):
+        s=snapshot();s['instrument'].update(lotSz='100',minSz='100')
         with self.assertRaisesRegex(ValueError,'MIN_CONTRACT_SIZE'):
-            make_position(s,{'atr':.4,'score':.2},'LONG',None,500)
-        with self.assertRaisesRegex(ValueError,'INSUFFICIENT_MARGIN'):
-            make_position(snapshot(),{'atr':.4,'score':.2},'LONG',None,5)
+            make_position(s,{'atr':.8,'score':.2},'LONG',None,500)
+        with self.assertRaisesRegex(ValueError,'CASH_TARGET_LEVERAGE_LIMIT'):
+            make_position(snapshot(),{'atr':.05,'score':.2},'LONG',None,500)
+        with self.assertRaisesRegex(ValueError,'CASH_TARGET_LEVERAGE_LIMIT'):
+            make_position(snapshot(),{'atr':.8,'score':.2},'SHORT',None,5)
+
+    def test_legacy_open_position_keeps_its_original_target(self):
+        s=snapshot()
+        p=make_position(s,{'atr':.8,'score':.2},'LONG',.2,500,trial=True)
+        p.update(trial=False,version='FUSION-R3-v1.1.0',position_sizing='FIXED_NOTIONAL')
+        s['ts']+=60
+        s['ticker'].update(bidPx=str(p['take_price']),askPx=str(p['take_price']+.01))
+        result=advance(p,s)
+        self.assertEqual(result['exit_reason'],'TAKE_PROFIT')
+        self.assertEqual(result['version'],'FUSION-R3-v1.1.0')
+        self.assertAlmostEqual(result['pnl'],.6,places=10)
+
+    def test_allowed_signal_creates_cash_positions_and_exit_studies(self):
+        store=Store(':memory:');engine=Engine(store,None);s=snapshot()
+        s.update(trades=[],bars_by_timeframe={})
+        f={'atr':.8,'score':.2,'candle_ts':s['ts']//900*900-900,
+            'spread_fraction':.0002,'stop_fraction':.012,
+            'source_timestamps':dict.fromkeys(['ticker','book','oi','funding','ratio'],s['ts'])}
+        estimate={'ready':True,'probability':.7,'ev_r':1,'samples':15}
+        with patch('r3_bot.engine.calibrate',return_value=estimate):engine.decide(s,f,15)
+        positions=store.rows('position',limit=None)
+        self.assertEqual({p['account_id'] for p in positions},{'SOL_15_LONG','SOL_15_BOTH'})
+        for p in positions:
+            self.assertEqual(p['planned_reward_usd'],22)
+            self.assertAlmostEqual(p['risk_usd'],22/3)
+        self.assertEqual(store.count('study'),2)
+        for study in store.rows('study'):
+            self.assertEqual(len(study['cases']),16)
+            for case in study['cases'].values():
+                self.assertAlmostEqual(case['planned_reward_usd'],case['study_tp_r']*case['risk_usd'])
 
     def test_shadow_risk_remains_normalized(self):
-        p=make_position(snapshot(),{'atr':.4,'score':.2},'SHORT',1,500,trial=True)
+        p=make_position(snapshot(),{'atr':.8,'score':.2},'SHORT',1,500,trial=True)
         self.assertEqual(p['position_sizing'],'SHADOW_FIXED_RISK')
         self.assertAlmostEqual(p['risk_usd'],1,places=10)
 
@@ -89,7 +123,7 @@ class TradingTests(unittest.TestCase):
         self.assertFalse(calibrate(rows,'SHORT',.2)['ready'])
 
     def test_entry_partial_minute_not_replayed_with_past_extremes(self):
-        s=snapshot();p=make_position(s,{'atr':.4,'score':.2},'LONG',5,500)
+        s=snapshot();p=make_position(s,{'atr':.8,'score':.2},'LONG',5,500)
         s['ts']+=60
         start=p['entry_ts']//60*60
         s['bars1']=[[str(start*1000),'100','110','90','100','1','1','100','1']]
@@ -97,7 +131,7 @@ class TradingTests(unittest.TestCase):
         self.assertEqual(updated['status'],'OPEN')
 
     def test_80_percent_reversal_and_smaller_target(self):
-        s=snapshot();p=make_position(s,{'atr':.4,'score':.2},'LONG',5,500)
+        s=snapshot();p=make_position(s,{'atr':.8,'score':.2},'LONG',5,500)
         smaller=copy.deepcopy(p);smaller['take_price']=price_for_net_r(p,2)
         next_minute=p['last_minute']+60
         high=p['entry_price']+.85*(p['take_price']-p['entry_price'])
@@ -118,7 +152,7 @@ class TradingTests(unittest.TestCase):
         self.assertTrue(main['missed_2r'])
 
     def test_same_minute_order_does_not_invent_take_first(self):
-        s=snapshot();p=make_position(s,{'atr':.4,'score':.2},'LONG',5,500)
+        s=snapshot();p=make_position(s,{'atr':.8,'score':.2},'LONG',5,500)
         minute=p['last_minute']+60;s['ts']=minute+60
         s['bars1']=[[str(minute*1000),'100',str(p['take_price']+1),str(p['stop_price']-1),'100','1','1','100','1']]
         updated=advance(p,s)

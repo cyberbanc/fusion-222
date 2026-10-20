@@ -222,7 +222,8 @@ class Engine:
                     'calibration':cal,'quality':q,'features':f,'source_key':signal_key,
                     'executed':False,'version':C['version'],'mode':'PAPER',
                     'position_sizing':C['position_sizing'],
-                    'requested_notional_usd':C['fixed_notional_usd']}
+                    'target_net_profit_usd':C['target_net_profit_usd'],
+                    'requested_stop_loss_usd':C['planned_stop_loss_usd']}
                 if account_reason=='ALLOWED':
                     try:
                         p=make_position(s,f,side,None,a['bank'])
@@ -236,6 +237,9 @@ class Engine:
                                 case['stop_price']=price_for_net_r(p,-stop_r)
                                 case['take_price']=price_for_net_r(p,tp_r)
                                 case['study_stop_r']=stop_r;case['study_tp_r']=tp_r
+                                case['planned_reward_usd']=tp_r*p['risk_usd']
+                                case['target_net_profit_usd']=tp_r*p['risk_usd']
+                                case['requested_stop_loss_usd']=stop_r*p['risk_usd']
                                 cases[f'SL{stop_r}_TP{tp_r}']=case
                         self.store.put('study',p['id'],{'id':p['id'],'account_id':account_id,
                             'symbol':symbol,'created_ts':now,'status':'OPEN','cases':cases,
