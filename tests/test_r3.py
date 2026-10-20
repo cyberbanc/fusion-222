@@ -9,6 +9,7 @@ from r3_bot.config import CONFIG as C
 from r3_bot.engine import Engine,advance
 from r3_bot.strategy import make_position,close_position,calibrate,price_for_net_r,net_at_price
 from r3_bot.server import history_archive
+from r3_bot.trend import trend_state,classify_regime,directional_series
 
 
 def snapshot():
@@ -31,11 +32,12 @@ class TradingTests(unittest.TestCase):
         engine.run()
         engine.once.assert_called_once()
 
-    def test_24_independent_modes(self):
+    def test_32_independent_modes(self):
         store=Store(':memory:');Engine(store,None)
         accounts=store.rows('account',limit=None)
-        self.assertEqual(len(accounts),24)
-        self.assertEqual({a['direction_mode'] for a in accounts},{'LONG','BOTH','SHORT'})
+        self.assertEqual(len(accounts),32)
+        self.assertEqual({a['direction_mode'] for a in accounts},{'LONG','BOTH','SHORT','TREND'})
+        self.assertEqual(sum(a['direction_mode']=='TREND' for a in accounts),8)
         self.assertEqual({a['timeframe_minutes'] for a in accounts},{5,15,30,60})
         self.assertTrue(all(a['bank']==500 for a in accounts))
 
@@ -170,8 +172,90 @@ class TradingTests(unittest.TestCase):
         with zipfile.ZipFile(archive) as z:
             self.assertIsNone(z.testzip())
             self.assertEqual(len(z.read('decision.jsonl').splitlines()),321)
-            self.assertEqual(json.loads(z.read('manifest.json'))['counts']['account'],24)
+            self.assertEqual(json.loads(z.read('manifest.json'))['counts']['account'],32)
         archive.close()
+
+
+def trend_snapshot(closes,tf=15):
+    now=1800000000;start=now-len(closes)*tf*60
+    bars=[[str((start+i*tf*60)*1000),str(c),str(c+.2),str(c-.2),str(c),'1','1','100','1']
+        for i,c in enumerate(closes)]
+    return {'ts':now,'bars_by_timeframe':{str(tf):bars}}
+
+
+class TrendTests(unittest.TestCase):
+    def test_monotonic_up_down_have_dmi_direction_and_adx_strength(self):
+        for sign,side,state in [(1,'LONG','UP'),(-1,'SHORT','DOWN')]:
+            s=trend_snapshot([200+sign*i*.5 for i in range(100)])
+            tr=trend_state(s,15)
+            self.assertEqual(tr['state'],state);self.assertEqual(tr['direction'],side)
+            self.assertAlmostEqual(tr['adx'],100,places=8)
+
+    def test_flat_waits_and_breakout_uses_prior_channel(self):
+        closes=[100+(.05 if i%2 else -.05) for i in range(100)]
+        flat=trend_state(trend_snapshot(closes),15)
+        self.assertEqual(flat['state'],'FLAT');self.assertEqual(flat['direction'],'WAIT')
+        for final,side,state in [(102,'LONG','BREAKOUT_UP'),(98,'SHORT','BREAKOUT_DOWN')]:
+            tr=trend_state(trend_snapshot(closes+[final]),15)
+            self.assertEqual(tr['state'],state);self.assertEqual(tr['direction'],side)
+            self.assertLess(tr['channel_end_ts'],tr['candle_ts'])
+            self.assertLess(tr['support'],tr['resistance'])
+
+    def test_wick_is_not_a_confirmed_breakout(self):
+        s=trend_snapshot([100+(.05 if i%2 else -.05) for i in range(101)])
+        s['bars_by_timeframe']['15'][-1][2]='110'
+        self.assertEqual(trend_state(s,15)['direction'],'WAIT')
+
+    def test_future_and_unconfirmed_bars_do_not_change_signal(self):
+        s=trend_snapshot([100+i*.5 for i in range(100)]);before=trend_state(s,15)
+        for confirm in ['0','1']:
+            candidate=copy.deepcopy(s)
+            candidate['bars_by_timeframe']['15'].append([str(s['ts']*1000),'10000','11000','1','10000','1','1','1',confirm])
+            self.assertEqual(trend_state(candidate,15),before)
+
+    def profile_input(self,state,side):
+        s=snapshot();s.update(trades=[],bars_by_timeframe={})
+        reason='TREND_FLAT_WAIT_BREAKOUT' if side=='WAIT' else 'ALLOWED'
+        f={'atr':.8,'score':-.8,'candle_ts':s['ts']//900*900-900,
+            'spread_fraction':.0002,'stop_fraction':.012,
+            'source_timestamps':dict.fromkeys(['ticker','book','oi','funding','ratio'],s['ts']),
+            'trend':{'state':state,'direction':side,'reason':reason,'score':.8 if side=='LONG' else -.8}}
+        return s,f
+
+    def test_trend_direction_cannot_be_overridden_by_opposite_ev(self):
+        for state,side in [('UP','LONG'),('DOWN','SHORT')]:
+            store=Store(':memory:');engine=Engine(store,None);s,f=self.profile_input(state,side)
+            def estimate(rows,direction,score):
+                return {'ready':True,'probability':.7,'ev_r':.1 if direction==side else 1.5,'samples':15}
+            with patch('r3_bot.engine.calibrate',side_effect=estimate):
+                engine.decide(s,f,15,profile='TREND');engine.decide(s,f,15,profile='TREND')
+            positions=store.rows('position',limit=None)
+            self.assertEqual(len(positions),1)
+            self.assertEqual(positions[0]['account_id'],'SOL_15_TREND')
+            self.assertEqual(positions[0]['side'],side)
+            self.assertEqual(positions[0]['planned_reward_usd'],22)
+            self.assertAlmostEqual(positions[0]['risk_usd'],22/3)
+            self.assertEqual(store.count('decision'),1)
+            self.assertEqual(store.count('trial'),2)
+
+    def test_flat_blocks_entries_even_with_good_probability(self):
+        store=Store(':memory:');engine=Engine(store,None);s,f=self.profile_input('FLAT','WAIT')
+        with patch('r3_bot.engine.calibrate',return_value={'ready':True,'probability':.9,'ev_r':2,'samples':15}):
+            engine.decide(s,f,15,profile='TREND')
+        self.assertEqual(store.count('position'),0)
+        self.assertEqual(store.rows('decision')[0]['reason'],'TREND_FLAT_WAIT_BREAKOUT')
+        self.assertTrue(all(not p['selected'] for p in store.rows('trial')))
+
+    def test_trend_calibration_is_separate_from_classic(self):
+        store=Store(':memory:');engine=Engine(store,None);s,f=self.profile_input('UP','LONG')
+        for i in range(30):
+            store.put('trial','classic'+str(i),{'account_id':'SOL_15_SHADOW','status':'CLOSED',
+                'side':'LONG' if i%2 else 'SHORT','score':.8,'pnl_r':3,'exit_reason':'TAKE_PROFIT',
+                'created_ts':i,'exit_ts':s['ts']-1,'selected':True})
+        engine.decide(s,f,15,profile='TREND')
+        self.assertEqual(store.count('position'),0)
+        self.assertEqual(store.rows('decision')[0]['calibration_samples'],0)
+        self.assertEqual(store.rows('decision')[0]['reason'],'CALIBRATION_WARMUP')
 
 
 if __name__=='__main__':unittest.main()

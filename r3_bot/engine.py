@@ -6,6 +6,7 @@ import threading
 import time
 from .config import CONFIG as C, REASONS
 from .strategy import features,calibrate,quality,make_position,exit_for_bar,close_position,excursion,net_at_price,price_for_net_r
+from .trend import trend_state
 
 
 def advance(p,s):
@@ -77,6 +78,7 @@ class Engine:
                 if store.get('account',key):continue
                 symbol,tf,mode=key.split('_')
                 store.put('account',key,{'account_id':key,'symbol':symbol,'direction_mode':mode,
+                    'strategy_family':'TREND_BREAKOUT' if mode=='TREND' else 'FUSION_R3',
                     'timeframe_minutes':int(tf),
                     'initial_bank':C['initial_bank'],'bank':C['initial_bank'],'equity':C['initial_bank'],
                     'peak_equity':C['initial_bank'],'max_dd_usd':0.0,'max_dd_pct':0.0,
@@ -135,7 +137,7 @@ class Engine:
 
     def process(self,s):
         now=s['ts'];symbol=s['symbol'];previous=self.store.get('meta','latest_'+symbol)
-        all_features={tf:features(s,previous,tf) for tf in C['timeframes_minutes']}
+        all_features={tf:{**features(s,previous,tf),'trend':trend_state(s,tf)} for tf in C['timeframes_minutes']}
         with self.store.transaction():
             self.process_positions(s)
             self.update_accounts(s)
@@ -157,11 +159,17 @@ class Engine:
                     self.store.put('candle_tf',f'{symbol}:{tf}:{bar[0]}',{'symbol':symbol,
                         'ts':int(bar[0])//1000,'timeframe_minutes':int(tf),'bar':bar})
                 self.store.put('meta',f'last_tf_{symbol}_{tf}',{'ts':int(bars[-1][0])//1000})
-            for tf,f in all_features.items():self.decide(s,f,tf)
+            for tf,f in all_features.items():
+                self.decide(s,f,tf)
+                self.decide(s,f,tf,profile='TREND')
 
-    def decide(self,s,f,timeframe):
+    def decide(self,s,f,timeframe,profile='CLASSIC'):
             now=s['ts'];symbol=s['symbol']
             signal_key=f"{symbol}:{timeframe}:{f['candle_ts']}"
+            is_trend=profile=='TREND'
+            if is_trend:
+                signal_key+=':TREND'
+                f={**f,'score':f['trend']['score']}
             if self.store.get('signal',signal_key):return
             ages={k:now-v for k,v in f['source_timestamps'].items()}
             data_reason=None
@@ -172,15 +180,20 @@ class Engine:
             elif f['spread_fraction']>C['max_spread_fraction']:data_reason='SPREAD_TOO_WIDE'
             elif (2*C['fee_rate']+2*C['adverse_slippage']+f['spread_fraction'])/f['stop_fraction']>C['max_cost_fraction_of_stop']:
                 data_reason='VOLATILITY_TOO_LOW'
-            closed=[x for x in self.store.rows('trial',account=f'{symbol}_{timeframe}_SHADOW',status='CLOSED',limit=1000)
+            shadow_account=f'{symbol}_{timeframe}_TREND_SHADOW' if is_trend else f'{symbol}_{timeframe}_SHADOW'
+            closed=[x for x in self.store.rows('trial',account=shadow_account,status='CLOSED',limit=1000)
                 if x['exit_ts']<=now]
             cal={side:calibrate(closed,side,f['score']) for side in ['LONG','SHORT']}
             ready=all(v['ready'] for v in cal.values())
-            if ready and max(cal['LONG']['ev_r'],cal['SHORT']['ev_r'])>=0:
+            if is_trend:side=f['trend']['direction']
+            elif ready and max(cal['LONG']['ev_r'],cal['SHORT']['ev_r'])>=0:
                 side=max(cal,key=lambda k:cal[k]['ev_r'])
             else:side='LONG' if f['score']>=0 else 'SHORT'
-            selected=cal[side];q=quality(closed,side)
+            selected=cal.get(side,{'probability':None,'ev_r':None,
+                'samples':min(v['samples'] for v in cal.values()),'ready':False})
+            q=quality(closed,side)
             reason=data_reason
+            if not reason and is_trend and side=='WAIT':reason=f['trend']['reason']
             if not reason and not selected['ready']:reason='CALIBRATION_WARMUP'
             if not reason and selected['probability']<C['min_probability']:reason='PROBABILITY_BELOW_53'
             if not reason and selected['ev_r']<C['min_ev_r']:reason='EV_BELOW_MINIMUM'
@@ -197,7 +210,7 @@ class Engine:
                 self.store.put('source',raw_key,raw)
             self.store.put('signal',signal_key,{'symbol':symbol,'created_ts':now,
                 'candle_ts':f['candle_ts'],'timeframe_minutes':timeframe,'signal':side,'features':f,'calibration':cal,
-                'quality':q,'reason':reason,'raw_input_key':raw_key,'version':C['version']})
+                'quality':q,'reason':reason,'raw_input_key':raw_key,'version':C['version'],'profile':profile})
             # Bidirectional shadow trials train barrier probabilities without
             # spending money or pretending the old direction probability is TP probability.
             if data_reason is None:
@@ -205,11 +218,13 @@ class Engine:
                     trial=make_position(s,f,direction,1,500,trial=True)
                     trial.update(id=signal_key+':'+direction,selected=direction==side,
                         candle_ts=f['candle_ts'],timeframe_minutes=timeframe,
-                        account_id=f'{symbol}_{timeframe}_SHADOW')
+                        account_id=shadow_account,profile=profile)
+                    if is_trend:trial['trend']=f['trend']
                     self.store.put('trial',trial['id'],trial)
             for account_id in [k for k in C['accounts'] if k.startswith(f'{symbol}_{timeframe}_')]:
                 a=self.store.get('account',account_id);account_reason=reason
                 mode=a['direction_mode']
+                if (mode=='TREND')!=is_trend:continue
                 if mode=='LONG' and side=='SHORT':account_reason='SHORT_SKIPPED_LONG_ONLY'
                 if mode=='SHORT' and side=='LONG':account_reason='LONG_SKIPPED_SHORT_ONLY'
                 if account_reason=='ALLOWED' and self.store.count('position',account_id,status='OPEN'):
@@ -220,7 +235,7 @@ class Engine:
                     'probability':selected['probability'],'ev_r':selected['ev_r'],
                     'calibration_samples':selected['samples'],'calibration_ready':selected['ready'],
                     'calibration':cal,'quality':q,'features':f,'source_key':signal_key,
-                    'executed':False,'version':C['version'],'mode':'PAPER',
+                    'executed':False,'version':C['version'],'mode':'PAPER','profile':profile,
                     'position_sizing':C['position_sizing'],
                     'target_net_profit_usd':C['target_net_profit_usd'],
                     'requested_stop_loss_usd':C['planned_stop_loss_usd']}
@@ -228,7 +243,8 @@ class Engine:
                     try:
                         p=make_position(s,f,side,None,a['bank'])
                         p.update(id=account_id+':'+str(f['candle_ts']),account_id=account_id,
-                            candle_ts=f['candle_ts'],signal_key=signal_key,timeframe_minutes=timeframe)
+                            candle_ts=f['candle_ts'],signal_key=signal_key,timeframe_minutes=timeframe,profile=profile)
+                        if is_trend:p['trend']=f['trend']
                         self.store.put('position',p['id'],p)
                         cases={}
                         for stop_r in C['study_stops_r']:
@@ -252,6 +268,7 @@ class Engine:
                 a['status']='POSITION_OPEN' if decision['executed'] else account_reason
                 a['last_signal']=side;a['last_decision_ts']=now;a['last_probability']=selected['probability']
                 a['last_ev_r']=selected['ev_r'];a['calibration_samples']=selected['samples']
+                if is_trend:a['trend']=f['trend']
                 a['calibration']=cal;self.store.put('account',account_id,a)
 
     def once(self):

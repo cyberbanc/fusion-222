@@ -93,10 +93,11 @@ def history_archive(store):
             'config':CONFIG,'consistency':'Repeatable-read database snapshot; full history, no pagination cutoff.',
             'excursion_note':'mfe_r/mae_r are confirmed observations; *_upper_r are candle bounds. Closing-minute order can be ambiguous. TP price progress and net-R progress are separate.',
             'study_note':CONFIG['study_note'],'source':'OKX public market data; simulated fills and fee assumptions.',
-            'accounts':'Each account is independent and starts at $500; do not interpret the 24 account balances as one funded wallet.'}
+            'accounts':'Each account is independent and starts at $500; 24 classic plus 8 trend accounts are not one funded wallet. Trend accounts start at their activation time.'}
         z.writestr('manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2))
         z.writestr('README_RU.txt','FUSION R3 — полная история бумажной торговли.\n'
-            '24 независимых счёта: SOL/ETH × 5/15/30/60 минут × long-only/long+short/short-only.\n'
+            '32 независимых счёта: SOL/ETH × 5/15/30/60 минут × long-only/long+short/short-only/тренд+пробой.\n'
+            'Трендовые счета добавлены с версии 1.3 и начинают с $500 в момент активации. Тренд: EMA20/50, ADX14/DMI; флэт: ADX<=20; пробой канала предыдущих 20 свечей с буфером 0.1 ATR по закрытию. Отдельная калибровка Shadow, без подстановки прошлых результатов.\n'
             'С версии 1.1 торговые позиции имеют фиксированную стоимость $22 с округлением количества вниз по шагу контракта. Плановый риск по стопу меняется вместе с ATR и расходами.\n'
             'С версии 1.2 новые входы имеют цель +$22 после модельных торговых расходов и плановый стоп -$7.3333 до будущего funding. Объём рассчитывается от 1.5 ATR; после округления количества стоп уточняется до денежного риска. При превышении лимита залога/плеча вход пропускается.\n'
             'Версия и денежные параметры зафиксированы в каждой позиции. Старые позиции и результаты сохранены. Фактический убыток может превысить план при гэпе или задержке опроса; funding меняет итог.\n'

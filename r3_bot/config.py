@@ -3,10 +3,14 @@ import os
 TARGET_NET_PROFIT=float(os.getenv('TARGET_NET_PROFIT_USD','22'))
 
 CONFIG = {
-    'version': os.getenv('MODEL_VERSION', 'FUSION-R3-v1.2.0'),
+    'version': os.getenv('MODEL_VERSION', 'FUSION-R3-v1.3.0'),
     'mode': 'PAPER', 'source': 'OKX public USDT perpetuals',
     'symbols': ['SOL', 'ETH'], 'timeframes_minutes': [5, 15, 30, 60],
-    'accounts': [f'{symbol}_{tf}_{mode}' for symbol in ['SOL','ETH'] for tf in [5,15,30,60] for mode in ['LONG','BOTH','SHORT']],
+    'accounts': [f'{symbol}_{tf}_{mode}' for symbol in ['SOL','ETH'] for tf in [5,15,30,60] for mode in ['LONG','BOTH','SHORT','TREND']],
+    'trend_rules': {'method':'EMA_ADX_DONCHIAN_v1','ema_fast':20,'ema_slow':50,
+        'adx_period':14,'trend_adx_min':25,'flat_adx_max':20,'slope_bars':5,
+        'min_slope_atr':.05,'channel_bars':20,'breakout_buffer_atr':.1,
+        'note':'Independent trend profile: long only in confirmed uptrend, short only in downtrend; prior flat regime requires a candle-close breakout of the prior 20-candle channel. Separate shadow calibration, no fabricated prior trades.'},
     'initial_bank': float(os.getenv('INITIAL_BANK', '500')),
     'position_sizing': 'FIXED_CASH_TARGET',
     'reference_stake_usd': 22.0,
@@ -31,7 +35,7 @@ CONFIG = {
     'max_ratio_age_seconds': 1200,
     'data_gap_policy': 'No new positions while source is incomplete/stale. Backfill minute candles; stop first if both barriers touch in a minute.',
     'calibration_note': 'Estimate TP-before-SL-or-timeout probability only from already closed live shadow trials with similar weighted score. No historical book or crowd data is fabricated.',
-    'bank_note': '24 independent virtual accounts: 2 symbols x 3 direction modes x 4 timeframes. Each starts at $500; no aggregate bank is implied.',
+    'bank_note': '32 independent virtual accounts: 24 classic and 8 trend/breakout accounts. New trend accounts start at $500 on activation; old history is preserved. No aggregate bank is implied.',
     'study_targets_r': [1.5, 2.0, 2.5, 3.0],
     'study_stops_r': [.75, 1.0, 1.25, 1.5],
     'study_note': 'Same actual entries and quantities, alternative net TP/SL barriers. Studies continue to original 4-hour horizon after main exit. This is exit analysis, not a full independent strategy backtest.',
@@ -59,4 +63,7 @@ REASONS = {
     'MIN_CONTRACT_SIZE': 'Размер меньше минимального контракта',
     'AWAIT_NEXT_BAR': 'Ожидание следующей закрытой свечи выбранного таймфрейма',
     'DATA_GAP': 'Ожидание восстановления пропущенных минутных свечей',
+    'TREND_FLAT_WAIT_BREAKOUT': 'Флэт: ждём закрытия свечи за границей канала',
+    'TREND_NOT_CONFIRMED': 'Переходный режим: направление тренда не подтверждено',
+    'TREND_HISTORY_WARMUP': 'Недостаточно закрытых свечей для определения тренда',
 }
