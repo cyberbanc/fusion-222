@@ -2,7 +2,7 @@
 
 Paired LONG/SHORT labels from the same candle stay in one temporal group.
 No validation observation is used to fit coefficients. An unvalidated model
-can collect shadow outcomes but cannot open an actual paper position.
+collects shadow outcomes; the cadence policy labels any fixed-weight fallback separately.
 """
 import hashlib
 import math
@@ -112,8 +112,8 @@ def build_model(rows,now,symbol,tf):
 
 
 def get_model(store,symbol,tf,now):
-    key=f'learner_{symbol}_{tf}';cached=store.get('meta',key)
-    rows=store.rows('trial',account=f'{symbol}_{tf}_LEARNED_SHADOW',status='CLOSED',limit=1600)
+    key=f"learner_{C['entry_policy_id']}_{symbol}_{tf}";cached=store.get('meta',key)
+    rows=store.rows('trial',account=f"{symbol}_{tf}_LEARNED_SHADOW_{C['entry_policy_id']}",status='CLOSED',limit=1600)
     groups=paired_groups(rows,now);last=max((g['LONG']['candle_ts'] for g in groups),default=0)
     if cached:
         if cached['latest_group_ts']==last:return cached

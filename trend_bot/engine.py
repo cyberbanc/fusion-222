@@ -7,6 +7,7 @@ import time
 from .config import CONFIG as C, REASONS
 from .strategy import features,calibrate,quality,make_position,exit_for_bar,close_position,excursion,net_at_price,price_for_net_r
 from .trend import trend_state
+from .cadence import decide as cadence_decide
 from .scoring import ballot_input,score_profile
 from .learning import get_model,predict
 
@@ -76,6 +77,10 @@ class Engine:
             if not store.get('meta','started'):
                 store.put('meta','started',{'ts':now,'started_ts':now})
             store.put('meta','config',C)
+            policy_key='policy_'+C['entry_policy_id']
+            if not store.get('meta',policy_key):
+                store.put('meta',policy_key,{'ts':now,'started_ts':now,'policy_id':C['entry_policy_id'],
+                    'version':C['version'],'note':C['entry_policy_note']})
             for key in C['accounts']:
                 if store.get('account',key):continue
                 symbol,tf,mode=key.split('_')
@@ -171,118 +176,7 @@ class Engine:
                 for profile in C['scoring_profiles']:self.decide(s,f,tf,profile=profile)
 
     def decide(self,s,f,timeframe,profile='FIXED'):
-            now=s['ts'];symbol=s['symbol']
-            signal_key=f"{symbol}:{timeframe}:{f['candle_ts']}:{profile}"
-            if self.store.get('signal',signal_key):return
-            model=get_model(self.store,symbol,timeframe,now) if profile=='LEARNED' else None
-            scoring=score_profile(f['ballot_input'],profile,model['weights'] if model else None)
-            tr={**f['trend'],'direction':scoring['direction'],'reason':scoring['reason'],'state':scoring['state']}
-            f={**f,'score':scoring['score'],'scoring':scoring,'trend':tr}
-            ages={k:now-v for k,v in f['source_timestamps'].items()}
-            data_reason=None
-            if any(ages[k]>C['max_market_age_seconds'] or ages[k]<-5 for k in ['ticker','book','oi','funding']):
-                data_reason='STALE_MARKET_DATA'
-            elif ages['ratio']>C['max_ratio_age_seconds']:data_reason='STALE_MARKET_DATA'
-            elif now-(f['candle_ts']+timeframe*60)>120:data_reason='AWAIT_NEXT_BAR'
-            elif f['spread_fraction']>C['max_spread_fraction']:data_reason='SPREAD_TOO_WIDE'
-            elif (2*C['fee_rate']+2*C['adverse_slippage']+f['spread_fraction'])/f['stop_fraction']>C['max_cost_fraction_of_stop']:
-                data_reason='VOLATILITY_TOO_LOW'
-            shadow_account=f'{symbol}_{timeframe}_{profile}_SHADOW'
-            closed=[x for x in self.store.rows('trial',account=shadow_account,status='CLOSED',limit=1000)
-                if x['exit_ts']<=now]
-            if model:
-                # Only genuine held-out labels calibrate this fitted model.
-                closed=model.get('validation_rows',[]) if model['ready'] else []
-            cal={side:calibrate(closed,side,f['score']) for side in ['LONG','SHORT']}
-            side=scoring['direction']
-            selected=cal.get(side,{'probability':None,'ev_r':None,
-                'samples':min(v['samples'] for v in cal.values()),'ready':False})
-            q=quality(closed,side)
-            reason=data_reason
-            if not reason and side=='WAIT':reason=scoring['reason']
-            if not reason and model and not model['ready']:reason=model['status']
-            if not reason and not selected['ready']:reason='CALIBRATION_WARMUP'
-            if not reason and selected['probability']<C['min_probability']:reason='PROBABILITY_BELOW_53'
-            if not reason and selected['ev_r']<C['min_ev_r']:reason='EV_BELOW_MINIMUM'
-            if not reason and q['recent_samples']>=8 and q['recent_r']<=-3:reason='SHADOW_RECENT_DEGRADED'
-            if not reason and q['quality_samples']>=10 and (q['quality_pf'] or 0)<.85:reason='QUALITY_PF_BELOW_MINIMUM'
-            reason=reason or 'ALLOWED'
-            # Store original raw inputs once per symbol/decision, not six copies.
-            raw_key=f"{symbol}:{now}"
-            if not self.store.get('source',raw_key):
-                raw={k:v for k,v in s.items() if k not in ('bars1','bars_by_timeframe')}
-                raw['trades']=[{k:t[k] for k in ['ts','px','sz','side']} for t in s['trades']]
-                raw['bar_references']={tf:[b[0] for b in bars] for tf,bars in s['bars_by_timeframe'].items()}
-                raw['minute_references']=[b[0] for b in s['bars1'][-60:]]
-                self.store.put('source',raw_key,raw)
-            self.store.put('signal',signal_key,{'symbol':symbol,'created_ts':now,
-                'candle_ts':f['candle_ts'],'timeframe_minutes':timeframe,'signal':side,'features':f,'calibration':cal,
-                'quality':q,'reason':reason,'raw_input_key':raw_key,'version':C['version'],'profile':profile})
-            # Bidirectional shadow trials train barrier probabilities without
-            # spending money or pretending the old direction probability is TP probability.
-            if data_reason is None:
-                for direction in ['LONG','SHORT']:
-                    trial=make_position(s,f,direction,1,500,trial=True)
-                    trial.update(id=signal_key+':'+direction,selected=direction==side,
-                        candle_ts=f['candle_ts'],timeframe_minutes=timeframe,
-                        account_id=shadow_account,profile=profile)
-                    trial.update(trend=f['trend'],scoring=scoring,ballot_input=f['ballot_input'],
-                        model_id=model.get('model_id') if model else None)
-                    self.store.put('trial',trial['id'],trial)
-            for account_id in [k for k in C['accounts'] if k.startswith(f'{symbol}_{timeframe}_')]:
-                a=self.store.get('account',account_id);account_reason=reason
-                mode=a['direction_mode']
-                if mode!=profile:continue
-                if account_reason=='ALLOWED' and self.store.count('position',account_id,status='OPEN'):
-                    account_reason='POSITION_ALREADY_OPEN'
-                decision={'account_id':account_id,'symbol':symbol,'created_ts':now,
-                    'timeframe_minutes':timeframe,
-                    'candle_ts':f['candle_ts'],'signal':side,'reason':account_reason,
-                    'probability':selected['probability'],'ev_r':selected['ev_r'],
-                    'calibration_samples':selected['samples'],'calibration_ready':selected['ready'],
-                    'calibration':cal,'quality':q,'features':f,'source_key':signal_key,
-                    'executed':False,'version':C['version'],'mode':'PAPER','profile':profile,
-                    'position_sizing':C['position_sizing'],
-                    'target_net_profit_usd':C['target_net_profit_usd'],
-                    'requested_stop_loss_usd':C['planned_stop_loss_usd'],
-                    'scoring':scoring,'model_id':model.get('model_id') if model else None,
-                    'model_status':model['status'] if model else None}
-                if account_reason=='ALLOWED':
-                    try:
-                        p=make_position(s,f,side,None,a['bank'])
-                        p.update(id=account_id+':'+str(f['candle_ts']),account_id=account_id,
-                            candle_ts=f['candle_ts'],signal_key=signal_key,timeframe_minutes=timeframe,profile=profile)
-                        p.update(trend=f['trend'],scoring=scoring,ballot_input=f['ballot_input'],
-                            model_id=model.get('model_id') if model else None)
-                        self.store.put('position',p['id'],p)
-                        cases={}
-                        for stop_r in C['study_stops_r']:
-                            for tp_r in C['study_targets_r']:
-                                case=copy.deepcopy(p);case['trial']=True
-                                case['stop_price']=price_for_net_r(p,-stop_r)
-                                case['take_price']=price_for_net_r(p,tp_r)
-                                case['study_stop_r']=stop_r;case['study_tp_r']=tp_r
-                                case['planned_reward_usd']=tp_r*p['risk_usd']
-                                case['target_net_profit_usd']=tp_r*p['risk_usd']
-                                case['requested_stop_loss_usd']=stop_r*p['risk_usd']
-                                cases[f'SL{stop_r}_TP{tp_r}']=case
-                        self.store.put('study',p['id'],{'id':p['id'],'account_id':account_id,
-                            'symbol':symbol,'created_ts':now,'status':'OPEN','cases':cases,
-                            'note':C['study_note']})
-                        decision.update(executed=True,position_id=p['id'],risk_usd=p['risk_usd'],
-                            entry_price=p['entry_price'],stop_price=p['stop_price'],take_price=p['take_price'])
-                    except ValueError as exc:
-                        account_reason=str(exc);decision['reason']=account_reason
-                self.store.put('decision',account_id+':'+str(f['candle_ts']),decision)
-                a['status']='POSITION_OPEN' if decision['executed'] else account_reason
-                a['last_signal']=side;a['last_decision_ts']=now;a['last_probability']=selected['probability']
-                a['last_ev_r']=selected['ev_r'];a['calibration_samples']=selected['samples']
-                a['trend']=f['trend'];a['scoring']=scoring
-                if model:
-                    a['learning']={k:v for k,v in model.items() if k!='validation_rows'}
-                    if model.get('model_id') and side in ['LONG','SHORT']:
-                        a['model_tp_probability']=predict(model,{'side':side,'ballot_input':f['ballot_input']})
-                a['calibration']=cal;self.store.put('account',account_id,a)
+        return cadence_decide(self,s,f,timeframe,profile)
 
     def once(self):
         started=int(time.time());errors={}

@@ -72,11 +72,13 @@ class AccountAndExecutionTests(unittest.TestCase):
             for price,reason,expected in [(p['take_price'],'TAKE_PROFIT',22),(p['stop_price'],'STOP_LOSS',-22/3)]:
                 result=close_position(p,p['entry_ts']+60,price,reason)
                 self.assertAlmostEqual(result['pnl'],expected,places=9)
-            self.assertLessEqual(p['margin_usd']+p['entry_fee'],450)
+            self.assertIsNone(p['margin_usd']);self.assertTrue(p['synthetic_unfunded'])
 
     def test_leverage_limit_cannot_silently_shrink_goal(self):
-        with self.assertRaisesRegex(ValueError,'CASH_TARGET_LEVERAGE_LIMIT'):
-            make_position(market(),{'atr':.05,'score':.5},'LONG',None,500)
+        p=make_position(market(),{'atr':.05,'score':.5},'LONG',None,500)
+        self.assertEqual(p['planned_reward_usd'],22)
+        self.assertIsNone(p['margin_usd'])
+        self.assertFalse(p['funded_at_configured_leverage'])
 
     def test_profiles_have_separate_decisions_shadows_and_actual_accounts(self):
         store=Store(':memory:');engine=Engine(store,None);s,f=inputs()
@@ -90,12 +92,14 @@ class AccountAndExecutionTests(unittest.TestCase):
         for study in store.rows('study'):
             self.assertEqual(len(study['cases']),16)
 
-    def test_learned_never_falls_back_to_fixed_trading_before_model_is_ready(self):
+    def test_unvalidated_fallback_is_explicit_and_never_claims_learned_weights(self):
         store=Store(':memory:');engine=Engine(store,None);s,f=inputs()
         with patch('trend_bot.engine.calibrate',return_value={'ready':True,'probability':.9,'ev_r':2,'samples':15}):
             engine.decide(s,f,15,'LEARNED')
-        self.assertEqual(store.count('position'),0)
-        self.assertEqual(store.rows('decision')[0]['reason'],'MODEL_WARMUP')
+        self.assertEqual(store.count('position'),1)
+        self.assertEqual(store.rows('decision')[0]['learning_phase'],'FIXED_FALLBACK_UNVALIDATED')
+        self.assertIsNone(store.rows('position')[0]['model_id'])
+        self.assertEqual(store.rows('decision')[0]['model_status'],'MODEL_WARMUP')
         self.assertEqual(store.count('trial'),2)
         self.assertEqual(store.get('account','SOL_15_LEARNED')['learning']['observed_groups'],0)
 
@@ -108,7 +112,8 @@ class AccountAndExecutionTests(unittest.TestCase):
         engine.decide(s,f,15,'REGIME')
         decision=store.rows('decision')[0]
         self.assertEqual(decision['calibration_samples'],0)
-        self.assertEqual(decision['reason'],'CALIBRATION_WARMUP')
+        self.assertEqual(decision['reason'],'ALLOWED')
+        self.assertFalse(decision['calibration_ready'])
 
     def test_15_closed_observations_still_required_per_direction(self):
         rows=[{'side':'LONG','score':.5,'pnl_r':3,'exit_reason':'TAKE_PROFIT','exit_ts':i} for i in range(15)]
@@ -161,15 +166,15 @@ class ScoreTests(unittest.TestCase):
         b=ballot(-1,'DOWN');self.assertEqual(score_profile(b,'REGIME')['direction'],'SHORT')
         b=ballot(1,'BREAKOUT_UP')
         fixed=score_profile(b,'FIXED');regime=score_profile(b,'REGIME')
-        self.assertEqual(fixed['threshold'],50);self.assertEqual(regime['threshold'],60)
+        self.assertEqual(fixed['threshold'],25);self.assertEqual(regime['threshold'],25)
         self.assertEqual(regime['weights']['flow'],25)
         self.assertEqual(sum(regime['weights'].values()),100)
 
     def test_missing_data_does_not_get_renormalized_to_strong_vote(self):
-        b=ballot();b['blocks']['structure']=None
+        b=ballot();b['blocks']['structure']=None;b['blocks']['momentum']=None
         result=score_profile(b,'FIXED')
-        self.assertEqual(result['score_points'],75)
-        self.assertEqual(result['coverage'],75);self.assertEqual(result['reason'],'SCORE_DATA_INCOMPLETE')
+        self.assertEqual(result['score_points'],65)
+        self.assertEqual(result['coverage'],65);self.assertEqual(result['reason'],'SCORE_DATA_INCOMPLETE')
 
     def test_conflicting_votes_do_not_automatically_mean_flat(self):
         b=ballot();b['blocks']={'structure':1,'trend':-1,'momentum':1,'vwap':-1,'flow':1,'higher':-1}
@@ -178,10 +183,12 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(result['reason'],'SCORE_BELOW_THRESHOLD')
         self.assertNotEqual(result['state'],'FLAT')
 
-    def test_flat_and_transition_wait_even_when_votes_are_unanimous(self):
+    def test_flat_and_transition_require_structure_and_momentum_confirmation(self):
         for adx,state,reason in [(15,'FLAT','TREND_FLAT_WAIT_BREAKOUT'),(23,'TRANSITION','TREND_NOT_CONFIRMED')]:
             b=ballot(1,state);b['regime']['adx']=adx
-            self.assertEqual(score_profile(b,'FIXED')['reason'],reason)
+            self.assertEqual(score_profile(b,'FIXED')['direction'],'LONG')
+            b['blocks']['momentum']=-1
+            self.assertEqual(score_profile(b,'FIXED')['reason'],'TREND_NOT_CONFIRMED')
 
     def test_breakout_and_ballots_must_agree(self):
         b=ballot(-1,'BREAKOUT_UP');b['regime']['direction']='LONG'

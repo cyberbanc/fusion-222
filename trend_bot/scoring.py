@@ -165,20 +165,20 @@ def ballot_input(s,tf,f,tr):
 def score_profile(ballot,profile,learned_weights=None):
     rules=C['scoring_rules'];tr=ballot['regime'];state=tr.get('state','NO_DATA')
     breakout=state in ['BREAKOUT_UP','BREAKOUT_DOWN']
-    weights=dict(learned_weights or (rules['breakout_weights'] if profile=='REGIME' and breakout else rules['trend_weights']))
+    weights=dict(learned_weights or (rules['breakout_weights'] if profile=='REGIME' and (breakout or state in ['FLAT','TRANSITION']) else rules['trend_weights']))
     blocks=ballot['blocks'];contributions={k:weights[k]*(blocks[k] or 0.0) for k in BLOCKS}
     score=sum(contributions.values());coverage=sum(weights[k] for k in BLOCKS if blocks[k] is not None)
-    threshold=rules['breakout_threshold_regime'] if profile=='REGIME' and breakout else rules['threshold']
+    threshold=rules['breakout_threshold_regime'] if profile=='REGIME' and (breakout or state in ['FLAT','TRANSITION']) else rules['threshold']
+    if not breakout and tr.get('adx',0)<25:threshold=max(threshold,rules['flat_threshold'])
     direction='LONG' if score>=threshold else 'SHORT' if score<=-threshold else 'WAIT'
     agreeing=sum((blocks[k] or 0)*(1 if direction=='LONG' else -1)>0 for k in BLOCKS) if direction!='WAIT' else 0
     reason=None
     if coverage<rules['min_coverage']:reason='SCORE_DATA_INCOMPLETE'
     elif tr.get('adx') is None:reason='TREND_HISTORY_WARMUP'
-    elif not breakout and tr['adx']<=C['trend_rules']['flat_adx_max']:reason='TREND_FLAT_WAIT_BREAKOUT'
-    elif not breakout and tr['adx']<C['trend_rules']['trend_adx_min']:reason='TREND_NOT_CONFIRMED'
     elif direction=='WAIT':reason='SCORE_BELOW_THRESHOLD'
     elif breakout and direction!=tr['direction']:reason='SCORE_AGAINST_BREAKOUT'
     elif agreeing<rules['min_agreeing_blocks']:reason='SCORE_CONFLICT'
+    elif not breakout and tr.get('adx',0)<25 and not all((blocks[k] or 0)*(1 if direction=='LONG' else -1)>=.5 for k in ['structure','momentum']):reason='TREND_NOT_CONFIRMED'
     if reason:direction='WAIT'
     regime_state=state if breakout or tr.get('adx',0)<25 else 'UP' if direction=='LONG' else 'DOWN' if direction=='SHORT' else 'TRANSITION'
     return {'profile':profile,'score_points':score,'score':score/100,'direction':direction,
