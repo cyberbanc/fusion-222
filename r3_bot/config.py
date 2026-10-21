@@ -3,7 +3,8 @@ import os
 TARGET_NET_PROFIT=float(os.getenv('TARGET_NET_PROFIT_USD','22'))
 
 CONFIG = {
-    'version': os.getenv('MODEL_VERSION', 'FUSION-R3-v1.4.0'),
+    'version': 'FUSION-R3-v1.4.0',
+    'deployment_label': os.getenv('MODEL_VERSION'),
     'mode': 'PAPER', 'source': 'OKX public USDT perpetuals',
     'symbols': ['SOL', 'ETH'], 'timeframes_minutes': [5, 15, 30, 60],
     'accounts': [f'{symbol}_{tf}_{mode}' for symbol in ['SOL','ETH'] for tf in [5,15,30,60] for mode in ['LONG','BOTH','SHORT']],

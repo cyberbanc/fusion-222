@@ -328,5 +328,5 @@
     "HOURLY_ENTRY_LIMIT": 899,
     "SIGNAL_TOO_WEAK": 76
   },
-  "limitation": "Recorded source instants and minute observations only; stop first on ambiguous candles; snapshot tick paths incomplete. Retrospective experiment, no proof of out-of-sample edge, no changes to live history. LEARNED fallback is fixed weights until validation."
+  "limitation": "Recorded source instants and minute observations only; stop first on ambiguous candles; snapshot tick paths incomplete. Retrospective experiment, no proof of out-of-sample edge, no changes to live history. LEARNED fallback is fixed weights until validation. Historical intra-poll OI changes are not reconstructed: feature recomputation omits OI change. Results are approximate, not a tick-exact backtest."
 }
