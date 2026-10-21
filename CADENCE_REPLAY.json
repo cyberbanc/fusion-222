@@ -328,5 +328,38 @@
     "HOURLY_ENTRY_LIMIT": 899,
     "SIGNAL_TOO_WEAK": 76
   },
-  "limitation": "Recorded source instants and minute observations only; stop first on ambiguous candles; snapshot tick paths incomplete. Retrospective experiment, no proof of out-of-sample edge, no changes to live history. LEARNED fallback is fixed weights until validation. Historical intra-poll OI changes are not reconstructed: feature recomputation omits OI change. Results are approximate, not a tick-exact backtest."
+  "limitation": "Recorded source instants and minute observations only; stop first on ambiguous candles; snapshot tick paths incomplete. Retrospective experiment, no proof of out-of-sample edge, no changes to live history. LEARNED fallback is fixed weights until validation. Historical intra-poll OI changes are not reconstructed: feature recomputation omits OI change. Results are approximate, not a tick-exact backtest.",
+  "input_export_utc": "2026-10-21T15:48:11+00:00",
+  "input_counts": {
+    "account": 32,
+    "candle1": 4129,
+    "candle_tf": 2070,
+    "decision": 3416,
+    "equity": 42748,
+    "event": 14,
+    "funding": 0,
+    "meta": 15,
+    "position": 6,
+    "signal": 1164,
+    "snapshot": 3533,
+    "source": 717,
+    "study": 6,
+    "trial": 1152
+  },
+  "input_sha256_jsonl": {
+    "account.jsonl": "69aa955cc5a6686bcf0b3ad94073c5bcb132d0d52c12b377a780c860729a60e2",
+    "candle1.jsonl": "ca518004a30a6b98cd0b809825061702f15cfe50a9a2708eb1e64ffeb445d714",
+    "candle_tf.jsonl": "4eec358e431c53b2c7e26262087cb98fd0b95bd8576b2e33794517676209fc90",
+    "decision.jsonl": "7ac224b4a70b84f6901e3ca59d9b1e38b7d9db076cf12ab943e3e7e3607193d3",
+    "equity.jsonl": "8850366d493204a3030f1486b6538a60f94ee20d63fb517fcec3496267f6f4b9",
+    "event.jsonl": "3fb97331b4049aeef3482ecda8f28db2812db71743e789e328a1d3097efb8d06",
+    "funding.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "meta.jsonl": "5ce32d24cb2fb642b1af3e543f8840320bf6f60a9531ce9497a0fccfdf708e2e",
+    "position.jsonl": "6bcfebd2e366af28a7558c4c018e9abba0e04bfd54cdf1e7f772219323dc3203",
+    "signal.jsonl": "2a47e7e8a300adc73703ab47c04b4f49f1b9319a14e80af5da923d0c7b74ef5b",
+    "snapshot.jsonl": "547ec73999a1dbdd60151589534bf5279e89f4e55cde7d5100af941df3369bb9",
+    "source.jsonl": "dd21aefb9aff4522c57841e1de280a8814a26ba4e76a7ddb210d6bc10c47ba6f",
+    "study.jsonl": "faaab4bc0a517d20a15204dd76408e09ef167b4f6141d030c7c79a7d62267d15",
+    "trial.jsonl": "4436759624cc541f289036ee89960d9829c9974638551719a7d50c85e1663831"
+  }
 }
