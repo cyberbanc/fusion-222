@@ -152,8 +152,11 @@ def make_position(s,f,side,risk,bank,trial=False):
             if qty*per_loss<=cash_risk+1e-9:break
             qty=min(qty-step,math.floor(cash_risk/per_loss/step)*step)
         else:raise ValueError('Invalid cash sizing convergence')
-        if qty*entry/C['max_leverage']+qty*entry*fee>bank*.90:
-            raise ValueError('CASH_TARGET_LEVERAGE_LIMIT')
+        if C.get('collateral_required',True):
+            if qty*entry/C['max_leverage']+qty*entry*fee>bank*.90:
+                raise ValueError('CASH_TARGET_LEVERAGE_LIMIT')
+        elif bank<cash_risk:
+            raise ValueError('INSUFFICIENT_RISK_BUDGET')
     stop=entry-sign*distance;stop_exec=stop*(1-sign*slip)
     atr_stop=stop
     planned_loss=cash_risk
@@ -169,13 +172,17 @@ def make_position(s,f,side,risk,bank,trial=False):
         'entry_ts':s['ts'],'created_ts':s['ts'],'entry_price':entry,'quantity':qty,
         'stop_price':stop,'take_price':take,'risk_usd':planned_loss,
         'planned_reward_usd':reward,'notional_usd':qty*entry,
-        'position_sizing':'SHADOW_FIXED_RISK' if trial else 'FIXED_CASH_TARGET',
+        'position_sizing':'SHADOW_FIXED_RISK' if trial else C['position_sizing'],
         'requested_notional_usd':None,'requested_stop_loss_usd':cash_risk,
         'target_net_profit_usd':reward,'reference_stake_usd':None if trial else C['reference_stake_usd'],
         'atr_stop_price':atr_stop,'stop_atr_multiple':abs(entry-stop)/f['atr'],
-        'margin_usd':qty*entry/C['max_leverage'],'leverage':C['max_leverage'],
+        'margin_usd':qty*entry/C['max_leverage'] if C.get('collateral_required',True) else None,
+        'leverage':C['max_leverage'] if C.get('collateral_required',True) else None,
+        'synthetic_unfunded':not C.get('collateral_required',True),
+        'required_exposure_to_bank':qty*entry/bank if bank>0 else None,
+        'funded_at_configured_leverage':qty*entry/C['max_leverage']+qty*entry*fee<=bank*.90,
         'entry_fee':qty*entry*fee,'funding_usd':0.0,'funding_events':[],
-        'expires_ts':s['ts']//60*60+C['max_hold_seconds'],'last_minute':s['ts']//60*60,
+        'expires_ts':s['ts']+C['max_hold_seconds'],'last_minute':s['ts']//60*60,
         'next_funding_ts':int(s['funding']['fundingTime'])//1000,
         'score':f['score'],'status':'OPEN','mode':'PAPER','version':C['version'],
         'trial':trial,'max_hold_seconds':C['max_hold_seconds']}

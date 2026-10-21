@@ -73,7 +73,7 @@ class TradingTests(unittest.TestCase):
             self.assertAlmostEqual(win['pnl_r'],3,places=10)
             self.assertAlmostEqual(loss['pnl'],-22/3,places=9)
             self.assertAlmostEqual(win['pnl'],22,places=9)
-            self.assertLessEqual(p['margin_usd'],450.001)
+            self.assertIsNone(p['margin_usd']);self.assertTrue(p['synthetic_unfunded'])
 
     def test_cash_target_independent_of_bank_and_atr(self):
         s=snapshot()
@@ -82,7 +82,7 @@ class TradingTests(unittest.TestCase):
             for bank in [500,1000,2000]:
                 for atr in [.8,1.2]:
                     p=make_position(s,{'atr':atr,'score':.2},side,None,bank)
-                    self.assertEqual(p['position_sizing'],'FIXED_CASH_TARGET')
+                    self.assertEqual(p['position_sizing'],'SYNTHETIC_CASH_TARGET')
                     self.assertAlmostEqual(p['risk_usd'],22/3,places=10)
                     self.assertEqual(p['planned_reward_usd'],22)
                     self.assertAlmostEqual(net_at_price(p,p['stop_price']),-1,places=10)
@@ -94,9 +94,11 @@ class TradingTests(unittest.TestCase):
         s=snapshot();s['instrument'].update(lotSz='100',minSz='100')
         with self.assertRaisesRegex(ValueError,'MIN_CONTRACT_SIZE'):
             make_position(s,{'atr':.8,'score':.2},'LONG',None,500)
-        with self.assertRaisesRegex(ValueError,'CASH_TARGET_LEVERAGE_LIMIT'):
-            make_position(snapshot(),{'atr':.05,'score':.2},'LONG',None,500)
-        with self.assertRaisesRegex(ValueError,'CASH_TARGET_LEVERAGE_LIMIT'):
+        p=make_position(snapshot(),{'atr':.05,'score':.2},'LONG',None,500)
+        self.assertEqual(p['planned_reward_usd'],22)
+        self.assertFalse(p['funded_at_configured_leverage'])
+        self.assertIsNone(p['margin_usd'])
+        with self.assertRaisesRegex(ValueError,'INSUFFICIENT_RISK_BUDGET'):
             make_position(snapshot(),{'atr':.8,'score':.2},'SHORT',None,5)
 
     def test_legacy_open_position_keeps_its_original_target(self):
@@ -251,40 +253,13 @@ class TrendTests(unittest.TestCase):
             'trend':{'state':state,'direction':side,'reason':reason,'score':.8 if side=='LONG' else -.8}}
         return s,f
 
-    def test_trend_direction_cannot_be_overridden_by_opposite_ev(self):
-        for state,side in [('UP','LONG'),('DOWN','SHORT')]:
-            store=Store(':memory:');engine=Engine(store,None);s,f=self.profile_input(state,side)
-            def estimate(rows,direction,score):
-                return {'ready':True,'probability':.7,'ev_r':.1 if direction==side else 1.5,'samples':15}
-            with patch('r3_bot.engine.calibrate',side_effect=estimate):
-                engine.decide(s,f,15,profile='TREND');engine.decide(s,f,15,profile='TREND')
-            positions=store.rows('position',limit=None)
-            self.assertEqual(len(positions),1)
-            self.assertEqual(positions[0]['account_id'],'SOL_15_TREND')
-            self.assertEqual(positions[0]['side'],side)
-            self.assertEqual(positions[0]['planned_reward_usd'],22)
-            self.assertAlmostEqual(positions[0]['risk_usd'],22/3)
-            self.assertEqual(store.count('decision'),1)
-            self.assertEqual(store.count('trial'),2)
-
-    def test_flat_blocks_entries_even_with_good_probability(self):
-        store=Store(':memory:');engine=Engine(store,None);s,f=self.profile_input('FLAT','WAIT')
-        with patch('r3_bot.engine.calibrate',return_value={'ready':True,'probability':.9,'ev_r':2,'samples':15}):
-            engine.decide(s,f,15,profile='TREND')
+    def test_retired_trend_profile_never_creates_new_trades_or_decisions(self):
+        store=Store(':memory:');engine=Engine(store,None)
+        for state,side in [('UP','LONG'),('DOWN','SHORT'),('FLAT','WAIT')]:
+            s,f=self.profile_input(state,side);engine.decide(s,f,15,profile='TREND')
         self.assertEqual(store.count('position'),0)
-        self.assertEqual(store.rows('decision')[0]['reason'],'TREND_FLAT_WAIT_BREAKOUT')
-        self.assertTrue(all(not p['selected'] for p in store.rows('trial')))
-
-    def test_trend_calibration_is_separate_from_classic(self):
-        store=Store(':memory:');engine=Engine(store,None);s,f=self.profile_input('UP','LONG')
-        for i in range(30):
-            store.put('trial','classic'+str(i),{'account_id':'SOL_15_SHADOW','status':'CLOSED',
-                'side':'LONG' if i%2 else 'SHORT','score':.8,'pnl_r':3,'exit_reason':'TAKE_PROFIT',
-                'created_ts':i,'exit_ts':s['ts']-1,'selected':True})
-        engine.decide(s,f,15,profile='TREND')
-        self.assertEqual(store.count('position'),0)
-        self.assertEqual(store.rows('decision')[0]['calibration_samples'],0)
-        self.assertEqual(store.rows('decision')[0]['reason'],'CALIBRATION_WARMUP')
+        self.assertEqual(store.count('decision'),0)
+        self.assertEqual(store.count('trial'),0)
 
 
 if __name__=='__main__':unittest.main()

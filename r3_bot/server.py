@@ -30,7 +30,16 @@ def summary(store):
         a['settled_pnl']=a['bank']-a['initial_bank']
         a['decisions']=store.count('decision',a['account_id'])
         a['positions']=store.rows('position',account=a['account_id'],status='OPEN',limit=2)
-        a['next_signal_ts']=(now//(a['timeframe_minutes']*60)+1)*(a['timeframe_minutes']*60)
+        a['next_signal_ts']=(now//CONFIG['decision_interval_seconds']+1)*CONFIG['decision_interval_seconds']
+        entries=store.rows('position',account=a['account_id'],limit=None)
+        new=[p for p in entries if p.get('entry_policy_id')==CONFIG['entry_policy_id']]
+        activation=store.get('meta','policy_'+CONFIG['entry_policy_id'],{}).get('started_ts',now)
+        hours=max((now-activation)/3600,1/60)
+        a['cadence']={'entries_last_hour':sum(now-3600<p['entry_ts']<=now for p in new),
+            'entries_since_policy':len(new),'average_entries_per_hour':len(new)/hours,
+            'elapsed_hours':hours,'policy_started_ts':activation,
+            'closed_pnl':sum(p.get('pnl',0) for p in new if p['status']=='CLOSED'),
+            'provisional_entries':sum(p.get('learning_phase')=='FIXED_FALLBACK_UNVALIDATED' for p in new)}
     runtime=store.get('meta','runtime',{})
     runtime['stale']=now-runtime.get('last_poll_ts',0)>120
     return {'server_ts':now,'config':CONFIG,'reasons':REASONS,'runtime':runtime,
@@ -97,6 +106,13 @@ def history_archive(store):
             'study_note':CONFIG['study_note'],'source':'OKX public market data; simulated fills and fee assumptions.',
             'accounts':CONFIG['bank_note'],'active_accounts':CONFIG['accounts']}
         z.writestr('manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2))
+        z.writestr('CURRENT_POLICY_RU.txt','Текущая экспериментальная политика CADENCE_30M_V1.\n'
+            'Проверка каждые 5 минут; выбранный ТФ задаёт контекст. Пауза между входами 30 минут, максимум 2 за скользящий час, удержание до 30 минут. Минимум частоты и положительное преимущество не гарантированы.\n'
+            'Синтетическая бумажная модель без проверки обеспечения: TP +$22 / SL -$7.3333 до будущего funding. Объём и required_exposure_to_bank записаны в позиции; margin_usd/leverage=null. Это не подтверждение доступности исполнения на реальной бирже с данным банком.\n'
+            'Стоп от ATR пятиминутных свечей, с нижней границей по расходам. Сохраняются комиссии, проскальзывание, спред, funding, шаг контракта и глубина стакана. Банк меньше денежного риска блокирует вход.\n'
+            '53%, EV, прогрев 15 Shadow и качество теперь диагностические метрики; они не запрещают новые экспериментальные paper-входы. Старые исходы не смешиваются с калибровкой новых правил.\n'
+            'LEARNED при отсутствии проверенной модели использует явно помеченный FIXED_FALLBACK_UNVALIDATED; это не проверенная обученная стратегия. После успешной проверки используются обученные веса.\n'
+            'Записи до обновления и открытые позиции сохраняют исходную версию и временной лимит. Ретроспективные результаты не вставляются в торговую историю. Исторические правила описаны в README_RU.txt; текущие — в CURRENT_POLICY_RU.txt и manifest.config.\n')
         z.writestr('README_RU.txt','FUSION R3 — полная история бумажной торговли.\n'
             '24 активных независимых счёта: SOL/ETH × 5/15/30/60 минут × long-only/long+short/short-only.\n'
             'С версии 1.3.1 прежние 8 TREND-счетов отключены для новых входов и скрыты с основного дэшборда. Их счета, решения, Shadow, позиции и капитал сохранены в этом архиве. Трендовая лаборатория с 24 новыми вариантами имеет отдельный сервис, таблицу, дэшборд и экспорт.\n'
