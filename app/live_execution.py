@@ -139,11 +139,11 @@ class LiveExecutor:
             return self._contract(w3).functions.ledger(int(epoch), address).call()
 
         raw = self.client._call(read)
-        amount_wei = int(raw[0])
+        amount_wei = int(raw[1])
         return {
             "amount_wei": amount_wei,
             "amount_bnb": float(Web3.from_wei(amount_wei, "ether")),
-            "position": int(raw[1]),
+            "position": int(raw[0]),
             "claimed": bool(raw[2]),
         }
 

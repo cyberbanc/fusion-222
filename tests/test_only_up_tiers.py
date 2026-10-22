@@ -169,3 +169,18 @@ def test_new_wallet_can_pass_config_when_owner_supplies_it(monkeypatch):
     monkeypatch.setattr(le,'SETTINGS',replace(le.SETTINGS,worker_enabled=True,real_execution_enabled=True,wallet_private_key='test-placeholder-not-a-real-key',expected_wallet_address=address))
     monkeypatch.setattr(le.Account,'from_key',lambda key:NS(address=address))
     assert le.LiveExecutor(NS()).ready
+
+
+def test_real_ledger_abi_decodes_position_then_uint256_amount(monkeypatch):
+    from app.abi import PREDICTION_ABI
+    from eth_abi import encode,decode
+    abi=next(x for x in PREDICTION_ABI if x.get('name')=='ledger')
+    types=[x['type'] for x in abi['outputs']]
+    assert types==['uint8','uint256','bool']
+    encoded=encode(['uint8','uint256','bool'],[0,wei('.088'),False])
+    raw=decode(types,encoded)
+    e=le.LiveExecutor(NS(_call=lambda fn:raw))
+    e._account=NS(address='0x0000000000000000000000000000000000000001')
+    ledger=e.ledger(123)
+    assert ledger['position']==0 and ledger['amount_wei']==wei('.088')
+    assert ledger['amount_bnb']==.088

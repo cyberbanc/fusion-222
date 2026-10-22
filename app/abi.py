@@ -56,8 +56,8 @@ PREDICTION_ABI = [
         ],
         "name": "ledger",
         "outputs": [
-            {"internalType": "uint256", "name": "amount", "type": "uint256"},
             {"internalType": "uint8", "name": "position", "type": "uint8"},
+            {"internalType": "uint256", "name": "amount", "type": "uint256"},
             {"internalType": "bool", "name": "claimed", "type": "bool"},
         ],
         "stateMutability": "view",
