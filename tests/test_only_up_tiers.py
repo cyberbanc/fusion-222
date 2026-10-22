@@ -123,3 +123,33 @@ def test_up_reference_is_not_sized_from_paper_wallet(monkeypatch):
     monkeypatch.setattr(worker.db,'insert_decision',lambda d:d)
     d=worker.create_mirrored_decision(NS(betting_epoch=123,live_epoch=122,chain_timestamp=1000,seconds_to_lock=20,chainlink_price=500,to_dict=lambda:{}))
     assert d['stake']==0 and d['bank_before'] is None and d['execution_requested']
+
+
+def test_claim_uses_contract_event_not_deposit_balance_change(executor,monkeypatch):
+    e,snap,state,sends=executor
+    monkeypatch.setattr(le,'SETTINGS',replace(le.SETTINGS,auto_claim_enabled=True))
+    state.update(trade_executed=True,settled=True,outcome='WIN',stake_bnb=.1,bet_gas_fee_bnb=.0001,bnb_usd_price=500,claim_tx_hash='0xclaim')
+    receipt={'status':1,'gasUsed':100000,'effectiveGasPrice':10**9}
+    monkeypatch.setattr(e,'_receipt',lambda tx:receipt)
+    monkeypatch.setattr(e,'wallet_snapshot',lambda *a,**kw:{'balance_bnb':10000})
+    monkeypatch.setattr(le.db,'get_transaction',lambda tx:{'balance_before_bnb':1})
+    event={'address':le.SETTINGS.prediction_contract,'args':{'sender':e.address,'epoch':123,'amount':wei('.2')}}
+    e.client._call=lambda fn:[event]
+    result=e.finalize_actual(state,500)
+    assert result['actual_payout_bnb']==.2
+    assert result['actual_pnl_bnb']==pytest.approx(.0998)
+    assert result['reconciliation_status']=='CLAIM_CONFIRMED'
+    assert not sends
+
+
+def test_missing_claim_event_never_invents_payout(executor,monkeypatch):
+    e,snap,state,sends=executor
+    monkeypatch.setattr(le,'SETTINGS',replace(le.SETTINGS,auto_claim_enabled=True))
+    state.update(trade_executed=True,settled=True,outcome='WIN',stake_bnb=.1,claim_tx_hash='0xclaim')
+    monkeypatch.setattr(e,'_receipt',lambda tx:{'status':1})
+    monkeypatch.setattr(e,'wallet_snapshot',lambda *a,**kw:{'balance_bnb':9999})
+    monkeypatch.setattr(le.db,'get_transaction',lambda tx:{})
+    e.client._call=lambda fn:[]
+    result=e.finalize_actual(state,500)
+    assert result['reconciliation_status']=='CLAIM_LOG_MISSING'
+    assert result.get('actual_pnl_bnb') is None
