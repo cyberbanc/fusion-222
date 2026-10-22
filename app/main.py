@@ -15,6 +15,9 @@ from fastapi.responses import HTMLResponse
 
 from . import db
 from .config import SETTINGS
+from .stake_policy import POLICY, stake_quote
+import threading
+import time
 from .live_execution import from_env as live_executor_from_env
 from .pancake_client import from_env
 from .shadow import summarize
@@ -22,7 +25,7 @@ from .worker import bootstrap_rounds, loop, signal_cache, status as worker_statu
 
 _STOP: Optional[asyncio.Event] = None
 _TASK: Optional[asyncio.Task] = None
-_BUILD_REVISION = "fusion-222-real-v1.0.0-isolated-live"
+_BUILD_REVISION = "fusion-222-only-up-real-v2-tiers-22-44-88"
 _DASHBOARD_PATH = Path(__file__).resolve().parent.parent / "TILDA_FUSION_222_REAL.html"
 
 
@@ -59,7 +62,16 @@ async def lifespan(app: FastAPI):
             _TASK.cancel()
 
 
-app = FastAPI(title="FUSION-222 Real Bot", version=SETTINGS.version, lifespan=lifespan)
+# Refuse ambiguous or colliding write targets before any worker can start.
+if SETTINGS.execution_mode != "REAL" or not SETTINGS.mirror_paper_decisions:
+    raise RuntimeError("This deployment requires REAL mode and the ONLY UP paper mirror")
+if SETTINGS.reference_decisions_table != "fusion222_uponly_decisions":
+    raise RuntimeError("ONLY UP reference table is required")
+for table in (SETTINGS.bot_decisions_table, SETTINGS.bot_state_table, SETTINGS.bot_snapshots_table, SETTINGS.transactions_table, SETTINGS.wallet_snapshots_table, SETTINGS.base_rounds_table):
+    if not table.startswith("fusion222_uponly_real_"):
+        raise RuntimeError("Dedicated ONLY UP real write tables are required")
+
+app = FastAPI(title="FUSION-222 ONLY UP Real Bot", version=SETTINGS.version, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -77,10 +89,11 @@ def root():
         "version": SETTINGS.version,
         "build_revision": _BUILD_REVISION,
         "mode": "REAL",
-        "strategy": "EV>=2%, selected probability>=53%, payout ready, Shadow Recent, Quality PF>=0.85, Quality WR display-only, fixed $22; circuit breaker disabled",
-        "stake_mode": "fixed_22",
-        "fixed_stake": SETTINGS.fixed_stake,
-        "database_mode": "shared Fusion PostgreSQL; paper/base history read-only; real bot writes only fusion222_real_* tables",
+        "strategy": "EV>=2%, selected probability>=53%, payout ready, Shadow Recent, Quality PF>=0.85, Quality WR display-only, ONLY UP; USD stake tiers 22/44/88 from liquid BNB; circuit breaker disabled",
+        "stake_mode": POLICY["mode"],
+        "stake_policy": POLICY,
+        "fixed_stake": None,
+        "database_mode": "shared Fusion PostgreSQL; paper/base history read-only; real bot writes only fusion222_uponly_real_* tables",
         "wallet_accounting": "dashboard bank is the current on-chain BNB balance converted at the current Chainlink BNB/USD price",
         "signal_url": "/signal",
         "status_url": "/status?history=none",
@@ -114,7 +127,7 @@ def health():
         "worker": worker_status(),
         "execution": live_executor_from_env(client).status(),
         "tables": db.table_names(),
-        "fixed_stake": SETTINGS.fixed_stake,
+        "fixed_stake": None,
         "min_trade_ev": SETTINGS.min_trade_ev,
         "min_signal_probability": SETTINGS.min_signal_probability,
         "quality_win_rate_filter_enabled": SETTINGS.quality_win_rate_filter_enabled,
@@ -222,17 +235,17 @@ def status(
             "live_started_at": live_started_at,
             "live_uptime_seconds": _uptime(live_started_at),
             "signal_reference": {
-                "source": "current FUSION-222 paper history (read-only)",
+                "source": "current FUSION-222 ONLY UP paper history (read-only)",
                 "base_decisions_table": db.table_names().get("base_decisions_read_only"),
                 "paper_reference_table": db.table_names().get("paper_reference_read_only"),
                 "base_cutoff_epoch": SETTINGS.base_history_cutoff_epoch,
-                "fixed_stake": SETTINGS.fixed_stake,
+                "fixed_stake": None,
                 "min_trade_ev": SETTINGS.min_trade_ev,
                 "min_signal_probability": SETTINGS.min_signal_probability,
                 "quality_win_rate_is_gate": SETTINGS.quality_win_rate_filter_enabled,
                 "quality_pf_min": SETTINGS.quality_min_profit_factor,
             },
-            "history_storage": "separate fusion222_real_* tables; paper tables are read-only",
+            "history_storage": "separate fusion222_uponly_real_* tables; paper tables are read-only",
             "live_decision_count": live_count,
             "real_trade_count": db.history_count(trades_only=True),
             "transaction_count": db.transaction_count(),
@@ -341,3 +354,48 @@ def shadow_performance():
             "sources": result,
         }
     )
+
+
+_PREFLIGHT_LOCK = threading.Lock()
+_PREFLIGHT_CACHE: dict[str, Any] = {}
+_PREFLIGHT_AT = 0.0
+
+
+@app.get("/preflight")
+def preflight():
+    """Read-only chain inspection; never creates a bet or claim.
+
+    Native BNB only. The bank excludes locked stakes and unclaimed payouts.
+    The final executor performs fresh balance, price, round and gas checks.
+    """
+    global _PREFLIGHT_CACHE, _PREFLIGHT_AT
+    with _PREFLIGHT_LOCK:
+        if _PREFLIGHT_CACHE and time.monotonic() - _PREFLIGHT_AT < 10:
+            return _PREFLIGHT_CACHE
+        try:
+            client = from_env()
+            snap = client.market_snapshot()
+            executor = live_executor_from_env(client)
+            wallet = executor.wallet_snapshot(snap.chainlink_price, source="READ_ONLY_MONITOR", force=True)
+            if "balance_bnb" not in wallet:
+                raise RuntimeError("Wallet address or balance is unavailable")
+            quote = stake_quote(int(Decimal(str(wallet["balance_bnb"])) * Decimal(10**18)), snap.chainlink_price)
+            reference = db.get_reference_decision(snap.betting_epoch)
+            paused, minimum = client._call(lambda w3: (bool(client._prediction(w3).functions.paused().call()), int(client._prediction(w3).functions.minBetAmount().call())))
+            fresh = 0 <= snap.chain_timestamp - snap.oracle_updated_at <= SETTINGS.oracle_max_age_seconds
+            result = {
+                "ok": True, "checked_at": datetime.now(timezone.utc).isoformat(),
+                "chain_timestamp": snap.chain_timestamp, "oracle_updated_at": snap.oracle_updated_at,
+                "oracle_fresh": fresh, "wallet": wallet, "quote": quote,
+                "stake_policy": POLICY, "execution": executor.status(),
+                "contract_paused": paused, "contract_min_bet_bnb": minimum / 1e18,
+                "funds_above_stake_and_reserve": float(wallet["balance_bnb"]) >= quote["stake_bnb"] + SETTINGS.min_gas_reserve_bnb,
+                "affordability_is_preliminary": True,
+                "round": {"epoch": snap.betting_epoch, "lock_timestamp": snap.betting_round.lock_timestamp, "seconds_to_lock": snap.seconds_to_lock, "decision_window": snap.decision_window},
+                "paper_reference": {"available": bool(reference), "signal": (reference or {}).get("signal"), "eligible": bool((reference or {}).get("trade_executed")) and (reference or {}).get("signal") == "UP", "probability_up": (reference or {}).get("probability_up"), "ev_up": (reference or {}).get("ev_up"), "reason": (reference or {}).get("no_trade_reason")},
+            }
+        except Exception as exc:
+            result = {"ok": False, "error": f"{type(exc).__name__}: {exc}", "execution": live_executor_from_env().status()}
+        _PREFLIGHT_CACHE = _json_safe(result)
+        _PREFLIGHT_AT = time.monotonic()
+        return _PREFLIGHT_CACHE

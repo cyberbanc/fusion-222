@@ -128,3 +128,11 @@ CHAINLINK_ABI = [
         "type": "function",
     },
 ]
+
+PREDICTION_ABI.extend([
+    {"inputs": [], "name": "treasuryFee", "outputs": [{"type": "uint256", "name": ""}], "stateMutability": "view", "type": "function"},
+    {"anonymous": False, "type": "event", "name": "Claim", "inputs": [
+        {"indexed": True, "name": "sender", "type": "address"},
+        {"indexed": True, "name": "epoch", "type": "uint256"},
+        {"indexed": False, "name": "amount", "type": "uint256"}]}
+])

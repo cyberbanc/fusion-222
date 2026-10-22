@@ -48,8 +48,8 @@ def _csv_strings(name: str, default: Iterable[str]) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class Settings:
-    service_name: str = os.getenv("SERVICE_NAME", "FUSION-222-REAL")
-    version: str = os.getenv("MODEL_VERSION", "FUSION-222-REAL-v1.0.0")
+    service_name: str = os.getenv("SERVICE_NAME", "FUSION-222-ONLY-UP-REAL")
+    version: str = os.getenv("MODEL_VERSION", "FUSION-222-ONLY-UP-REAL-v2.0.0")
     execution_mode: str = os.getenv("EXECUTION_MODE", "REAL").strip().upper()
     retro_anchor_version: str = os.getenv("RETRO_ANCHOR_VERSION", "1.3.6.6")
     # Historical dashboard/replay scope. FUSION-222 must start from the
@@ -58,16 +58,16 @@ class Settings:
 
     database_url: str = os.getenv("DATABASE_URL", "")
     base_decisions_table: str = os.getenv("BASE_DECISIONS_TABLE", "auto")
-    base_rounds_table: str = os.getenv("BASE_ROUNDS_TABLE", "auto")
-    bot_decisions_table: str = os.getenv("BOT_DECISIONS_TABLE", "fusion222_real_decisions")
-    bot_state_table: str = os.getenv("BOT_STATE_TABLE", "fusion222_real_state")
-    bot_snapshots_table: str = os.getenv("BOT_SNAPSHOTS_TABLE", "fusion222_real_snapshots")
+    base_rounds_table: str = os.getenv("BASE_ROUNDS_TABLE", "fusion222_uponly_real_rounds")
+    bot_decisions_table: str = os.getenv("BOT_DECISIONS_TABLE", "fusion222_uponly_real_decisions")
+    bot_state_table: str = os.getenv("BOT_STATE_TABLE", "fusion222_uponly_real_state")
+    bot_snapshots_table: str = os.getenv("BOT_SNAPSHOTS_TABLE", "fusion222_uponly_real_snapshots")
     reference_decisions_table: str = os.getenv(
-        "REFERENCE_DECISIONS_TABLE", "fusion222_v1366_nobreaker_decisions"
+        "REFERENCE_DECISIONS_TABLE", "fusion222_uponly_decisions"
     )
-    transactions_table: str = os.getenv("TRANSACTIONS_TABLE", "fusion222_real_transactions")
+    transactions_table: str = os.getenv("TRANSACTIONS_TABLE", "fusion222_uponly_real_transactions")
     wallet_snapshots_table: str = os.getenv(
-        "WALLET_SNAPSHOTS_TABLE", "fusion222_real_wallet_snapshots"
+        "WALLET_SNAPSHOTS_TABLE", "fusion222_uponly_real_wallet_snapshots"
     )
     base_history_cutoff_epoch: int = _int("BASE_HISTORY_CUTOFF_EPOCH", 506403)
 
@@ -95,7 +95,7 @@ class Settings:
 
     # Real-money execution. The secret is supplied only as a Railway variable;
     # it is never returned by the API or written to PostgreSQL.
-    real_execution_enabled: bool = _bool("REAL_EXECUTION_ENABLED", True)
+    real_execution_enabled: bool = _bool("REAL_EXECUTION_ENABLED", False)
     mirror_paper_decisions: bool = _bool("MIRROR_PAPER_DECISIONS", True)
     wallet_private_key: str = os.getenv("WALLET_PRIVATE_KEY", "").strip()
     expected_wallet_address: str = os.getenv("WALLET_ADDRESS", "").strip()
@@ -104,10 +104,12 @@ class Settings:
     gas_limit_multiplier: float = _float("GAS_LIMIT_MULTIPLIER", 1.20)
     transaction_timeout_seconds: int = _int("TRANSACTION_TIMEOUT_SECONDS", 75)
     transaction_confirmations: int = _int("TRANSACTION_CONFIRMATIONS", 1)
-    auto_claim_enabled: bool = _bool("AUTO_CLAIM_ENABLED", True)
+    auto_claim_enabled: bool = _bool("AUTO_CLAIM_ENABLED", False)
     wallet_sync_seconds: int = _int("WALLET_SYNC_SECONDS", 15)
 
     # FUSION-222 gate + fixed stake.
+    oracle_max_age_seconds: int = _int("ORACLE_MAX_AGE_SECONDS", 60)
+    claim_gas_budget: int = _int("CLAIM_GAS_BUDGET", 250000)
     fixed_stake: float = _float("FIXED_STAKE", 22.0)
     min_trade_ev: float = _float("MIN_TRADE_EV", 0.02)
     min_signal_probability: float = _float("MIN_SIGNAL_PROBABILITY", 0.53)
@@ -188,7 +190,7 @@ class Settings:
 
     # Historical replay used to initialize the virtual bank. Only the
     # RETRO_SCOPE_VERSION slice is replayed.
-    retro_replay_enabled: bool = _bool("RETRO_REPLAY_ENABLED", True)
+    retro_replay_enabled: bool = _bool("RETRO_REPLAY_ENABLED", False)
     history_api_max_limit: int = _int("HISTORY_API_MAX_LIMIT", 100000)
 
 

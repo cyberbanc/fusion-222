@@ -1,4 +1,6 @@
 from types import SimpleNamespace
+from dataclasses import replace
+from app.stake_policy import POLICY
 
 from app.models import Forecast
 from app import worker
@@ -24,6 +26,7 @@ def make_forecast(ev=0.03, p=0.55):
 
 
 def prep(monkeypatch, ev=0.03, p=0.55, shadow_allowed=True):
+    monkeypatch.setattr(worker, "SETTINGS", replace(worker.SETTINGS, execution_mode="PAPER"))
     snap = Snapshot(betting_epoch=123, live_epoch=122, chain_timestamp=1000, seconds_to_lock=40)
     monkeypatch.setattr(worker.db, "get_decision", lambda epoch: None)
     monkeypatch.setattr(worker, "forecast", lambda current: make_forecast(ev, p))
@@ -33,13 +36,13 @@ def prep(monkeypatch, ev=0.03, p=0.55, shadow_allowed=True):
     return snap
 
 
-def test_good_signal_trades_fixed_22(monkeypatch):
+def test_legacy_paper_gate_still_accepts_good_up(monkeypatch):
     d = worker.create_locked_decision(prep(monkeypatch))
     assert d["execution_requested"] is True
-    assert d["trade_executed"] is False
-    assert d["execution_status"] == "PENDING"
+    assert d["trade_executed"] is True
+    assert d["execution_status"] == "CONFIRMED"
     assert d["stake"] == 22.0
-    assert d["stake_mode"] == "fixed_22"
+    assert d["stake_mode"] == POLICY["mode"]
 
 
 def test_ev_below_two_percent_is_blocked(monkeypatch):
@@ -54,7 +57,7 @@ def test_probability_below_53_is_blocked(monkeypatch):
     assert d["no_trade_reason"] == "PROBABILITY_BELOW_53_PERCENT"
 
 
-def test_real_decision_mirrors_exact_paper_row(monkeypatch):
+def test_real_decision_rejects_down_reference(monkeypatch):
     snap = Snapshot(
         betting_epoch=456,
         live_epoch=455,
@@ -97,13 +100,15 @@ def test_real_decision_mirrors_exact_paper_row(monkeypatch):
 
     assert d is not None
     assert d["signal"] == "DOWN"
-    assert d["stake"] == 22.0
-    assert d["execution_requested"] is True
+    assert d["stake"] == 0.0
+    assert d["execution_requested"] is False
     assert d["trade_executed"] is False
-    assert d["execution_status"] == "PENDING"
+    assert d["execution_status"] == "SKIPPED"
+    assert d["no_trade_reason"] == "DOWN_SKIPPED_UP_ONLY"
+    assert d["bank_before"] is None
     assert d["origin"] == "LIVE_REAL_MIRROR"
     assert d["features_json"]["mirrored_from_paper"] is True
-    assert d["strategy_version"] == "FUSION-222-v1.0.5"
+    assert d["strategy_version"] == worker.SETTINGS.version
 
 
 def test_real_mirror_waits_when_paper_row_is_not_ready(monkeypatch):

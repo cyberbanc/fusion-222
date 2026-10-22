@@ -12,6 +12,7 @@ from web3.exceptions import TimeExhausted, TransactionNotFound
 
 from . import db
 from .config import SETTINGS
+from .stake_policy import POLICY, stake_quote
 from .pancake_client import PancakeClient, from_env as pancake_from_env
 
 
@@ -52,7 +53,7 @@ class LiveExecutor:
             self._configuration_error = None
         except Exception as exc:
             self._account = None
-            self._configuration_error = f"{type(exc).__name__}: {exc}"
+            self._configuration_error = "Invalid wallet signing configuration"
 
     @property
     def address(self) -> str | None:
@@ -69,7 +70,10 @@ class LiveExecutor:
     def ready(self) -> bool:
         return bool(
             SETTINGS.execution_mode == "REAL"
+            and SETTINGS.worker_enabled
             and SETTINGS.real_execution_enabled
+            and SETTINGS.mirror_paper_decisions
+            and SETTINGS.reference_decisions_table == "fusion222_uponly_decisions"
             and self._account is not None
             and self._configuration_error is None
         )
@@ -77,6 +81,9 @@ class LiveExecutor:
     def status(self) -> dict[str, Any]:
         return {
             "mode": SETTINGS.execution_mode,
+            "up_only": True,
+            "stake_policy": POLICY,
+            "worker_enabled": SETTINGS.worker_enabled,
             "enabled": SETTINGS.real_execution_enabled,
             "ready": self.ready,
             "private_key_configured": bool(SETTINGS.wallet_private_key),
@@ -154,12 +161,16 @@ class LiveExecutor:
         return float(Web3.from_wei(used * price, "ether"))
 
     def _build_sign(self, fn, *, value_wei: int = 0) -> tuple[Any, str, int, int, int]:
-        if self._account is None:
+        if not self.ready:
             raise RuntimeError(self._configuration_error or "wallet is not configured")
         address = self._account.address
 
         def build(w3: Web3):
+            if int(w3.eth.chain_id) != SETTINGS.chain_id:
+                raise RuntimeError("Unexpected RPC chain id")
             nonce = int(w3.eth.get_transaction_count(address, "pending"))
+            if nonce != int(w3.eth.get_transaction_count(address, "latest")):
+                raise RuntimeError("Wallet has a pending transaction; wait for reconciliation")
             gas_price = int(w3.eth.gas_price)
             base = {
                 "from": address,
@@ -178,6 +189,8 @@ class LiveExecutor:
         return signed, _hex(signed.hash), nonce, gas, gas_price
 
     def _broadcast_and_wait(self, signed: Any, tx_hash: str) -> dict[str, Any] | None:
+        if not self.ready:
+            raise RuntimeError("Real execution is disarmed")
         try:
             self.client._call(lambda w3: w3.eth.send_raw_transaction(signed.raw_transaction))
         except Exception:
@@ -214,10 +227,15 @@ class LiveExecutor:
             if receipt is None:
                 return db.update_execution(epoch, execution_status="SUBMITTED", reconciliation_status="TX_PENDING")
             if int(receipt.get("status") or 0) != 1:
+                gas_fee = self._gas_fee_bnb(receipt)
+                db.upsert_transaction({"event_type": "BET", "betting_epoch": epoch, "tx_hash": tx_hash, "tx_status": "REVERTED", "wallet_address": self.address, "amount_bnb": 0.0, "gas_fee_bnb": gas_fee, "bnb_usd_price": bnb_usd_price, "metadata_json": {}})
                 return db.update_execution(
                     epoch,
                     execution_status="FAILED",
                     reconciliation_status="TX_REVERTED",
+                    bet_gas_fee_bnb=gas_fee,
+                    actual_pnl_bnb=-gas_fee,
+                    actual_pnl_usd=-gas_fee * float(decision.get("bnb_usd_price") or bnb_usd_price),
                     execution_error="On-chain bet transaction reverted",
                     trade_executed=False,
                 )
@@ -271,23 +289,25 @@ class LiveExecutor:
         if ledger["amount_wei"] > 0:
             return db.update_execution(
                 epoch,
-                execution_status="RECONCILED",
-                reconciliation_status="CONTRACT_LEDGER_MATCH",
+                execution_status="BLOCKED",
+                execution_requested=False,
+                reconciliation_status="EXTERNAL_BET_DETECTED",
                 wallet_address=self.address,
                 stake_bnb=ledger["amount_bnb"],
                 bnb_usd_price=bnb_usd_price,
-                trade_executed=True,
-                execution_error=None,
+                trade_executed=False,
+                execution_error="Contract already has a bet without this bot transaction hash; no duplicate or attribution",
             )
         return decision
 
     def execute_bet(self, decision: dict[str, Any], bnb_usd_price: float) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, db.execution_lock(self.address or "unconfigured"):
             epoch = int(decision["betting_epoch"])
+            decision = db.get_decision(epoch) or decision
             if not bool(decision.get("execution_requested")):
                 return decision
             reconciled = self.reconcile_bet(decision, bnb_usd_price)
-            if bool(reconciled.get("trade_executed")) or reconciled.get("tx_hash"):
+            if bool(reconciled.get("trade_executed")) or reconciled.get("tx_hash") or reconciled.get("reconciliation_status") == "EXTERNAL_BET_DETECTED":
                 return reconciled
             if not self.ready:
                 return db.update_execution(
@@ -298,69 +318,76 @@ class LiveExecutor:
                     trade_executed=False,
                 )
             side = str(decision.get("signal") or "").upper()
-            if side not in {"UP", "DOWN"}:
+            if side != "UP":
                 return db.update_execution(
                     epoch,
                     execution_status="FAILED",
-                    execution_error=f"Unsupported signal: {side}",
+                    execution_error=f"ONLY_UP blocks signal: {side}",
                     trade_executed=False,
                 )
-            if bnb_usd_price <= 0:
-                return db.update_execution(
-                    epoch,
-                    execution_status="BLOCKED",
-                    execution_error="Invalid BNB/USD price",
-                    trade_executed=False,
-                )
-
-            stake_usd = Decimal(str(decision.get("stake") or SETTINGS.fixed_stake))
-            stake_bnb = (stake_usd / Decimal(str(bnb_usd_price))).quantize(
-                Decimal("0.000000000000000001"), rounding=ROUND_DOWN
-            )
-            value_wei = int(stake_bnb * Decimal(10**18))
-
-            paused, min_bet_wei = self.client._call(
+            reference = db.get_reference_decision(epoch)
+            if not reference or not reference.get("trade_executed") or reference.get("signal") != "UP" or reference.get("breaker_applied"):
+                return db.update_execution(epoch, execution_status="BLOCKED", execution_error="No eligible ONLY UP reference for this epoch")
+            snapshot = self.client.market_snapshot()
+            if not snapshot.decision_window or snapshot.betting_epoch != epoch:
+                return db.update_execution(epoch, execution_status="BLOCKED", execution_error="Round changed or betting window closed")
+            if not (0 <= snapshot.chain_timestamp - snapshot.oracle_updated_at <= SETTINGS.oracle_max_age_seconds):
+                return db.update_execution(epoch, execution_status="BLOCKED", execution_error="Stale or future BNB/USD oracle")
+            bnb_usd_price = snapshot.chainlink_price
+            balance_before_wei = self._balance_wei(self.address or "")
+            quote = stake_quote(balance_before_wei, bnb_usd_price)
+            value_wei = quote["value_wei"]
+            stake_bnb = Decimal(value_wei) / Decimal(10**18)
+            paused, min_bet_wei, treasury_bps = self.client._call(
                 lambda w3: (
                     bool(self._contract(w3).functions.paused().call()),
                     int(self._contract(w3).functions.minBetAmount().call()),
+                    int(self._contract(w3).functions.treasuryFee().call()),
                 )
             )
-            if paused:
-                return db.update_execution(epoch, execution_status="BLOCKED", execution_error="Prediction contract is paused")
-            if value_wei < min_bet_wei:
-                return db.update_execution(
-                    epoch,
-                    execution_status="BLOCKED",
-                    execution_error=f"Stake is below contract minimum ({min_bet_wei} wei)",
-                )
-
-            balance_before_wei = self._balance_wei(self.address or "")
-            fn = (
-                (lambda w3: self._contract(w3).functions.betBull(epoch))
-                if side == "UP"
-                else (lambda w3: self._contract(w3).functions.betBear(epoch))
-            )
+            if paused or value_wei < min_bet_wei:
+                return db.update_execution(epoch, execution_status="BLOCKED", execution_error="Contract paused or stake below contract minimum")
+            fn = lambda w3: self._contract(w3).functions.betBull(epoch)
             signed, tx_hash, nonce, gas, gas_price = self._build_sign(fn, value_wei=value_wei)
             reserve_wei = int(Web3.to_wei(SETTINGS.min_gas_reserve_bnb, "ether"))
-            required_wei = value_wei + gas * gas_price + reserve_wei
+            required_wei = value_wei + gas * gas_price + reserve_wei + SETTINGS.claim_gas_budget * gas_price
             if balance_before_wei < required_wei:
-                return db.update_execution(
-                    epoch,
-                    execution_status="BLOCKED",
-                    wallet_address=self.address,
-                    stake_bnb=float(stake_bnb),
-                    bnb_usd_price=bnb_usd_price,
-                    execution_error=(
-                        f"Insufficient BNB balance: need {float(Web3.from_wei(required_wei, 'ether')):.8f} BNB "
-                        "including gas reserve"
-                    ),
-                    trade_executed=False,
-                )
-
+                return db.update_execution(epoch, execution_status="BLOCKED", stake=quote["stake_usd"], stake_tier=quote["stake_tier"], bank_before=quote["bank_usd"], execution_error="Insufficient BNB for selected tier, bet gas, claim budget and reserve", trade_executed=False)
+            # Account for our own bet's pool dilution and transaction gas. The
+            # fee is already in this payout coefficient: never subtract it twice.
+            amount = float(stake_bnb)
+            pool = snapshot.betting_round
+            corrected = (pool.total_amount_bnb + amount) / (pool.bull_amount_bnb + amount) * (1 - treasury_bps / 10000)
+            corrected *= float(decision.get("payout_correction_up") or SETTINGS.payout_haircut)
+            coeff = min(float(decision.get("expected_coeff_up") or 0), corrected)
+            gas_fraction = (gas + SETTINGS.claim_gas_budget) * gas_price / value_wei
+            ev = float(decision.get("probability_up") or 0) * coeff - 1 - gas_fraction
+            if not math.isfinite(ev) or not 0 < float(decision.get("probability_up") or 0) <= 1 or not 0 <= treasury_bps <= 1000 or ev < SETTINGS.min_trade_ev:
+                return db.update_execution(epoch, execution_status="BLOCKED", execution_error="EV below 2% after own-pool impact and gas", trade_executed=False)
+            # Recheck after RPC estimation/signing; a changed tier is retried on
+            # a later tick, without persisting or broadcasting this signed payload.
+            final = self.client.market_snapshot()
+            final_balance = self._balance_wei(self.address or "")
+            final_quote = stake_quote(final_balance, final.chainlink_price)
+            if (final.betting_epoch != epoch or not final.decision_window
+                or not 0 <= final.chain_timestamp - final.oracle_updated_at <= SETTINGS.oracle_max_age_seconds
+                or final_quote["stake_tier"] != quote["stake_tier"]
+                or abs(final.chainlink_price / bnb_usd_price - 1) > 0.001
+                or final_balance < required_wei):
+                return db.update_execution(epoch, execution_status="BLOCKED", execution_error="Pre-send window, wallet tier, price or funds changed")
+            final_pool = final.betting_round
+            final_coeff = (final_pool.total_amount_bnb + amount) / (final_pool.bull_amount_bnb + amount) * (1 - treasury_bps / 10000)
+            final_coeff = min(float(decision.get("expected_coeff_up") or 0), final_coeff * float(decision.get("payout_correction_up") or SETTINGS.payout_haircut))
+            if float(decision.get("probability_up") or 0) * final_coeff - 1 - gas_fraction < SETTINGS.min_trade_ev:
+                return db.update_execution(epoch, execution_status="BLOCKED", execution_error="Pool moved below execution EV threshold")
             balance_before_bnb = float(Web3.from_wei(balance_before_wei, "ether"))
             decision = db.update_execution(
                 epoch,
                 execution_status="PREPARED",
+                stake=quote["stake_usd"],
+                stake_mode=POLICY["mode"],
+                stake_tier=quote["stake_tier"],
+                bank_before=quote["bank_usd"],
                 wallet_address=self.address,
                 tx_hash=tx_hash,
                 tx_nonce=nonce,
@@ -433,14 +460,21 @@ class LiveExecutor:
         )
 
     def finalize_actual(self, decision: dict[str, Any], bnb_usd_price: float) -> dict[str, Any]:
-        with self._lock:
-            if not bool(decision.get("trade_executed")) or not bool(decision.get("settled")):
+        with self._lock, db.execution_lock(self.address or "unconfigured"):
+            decision = db.get_decision(int(decision["betting_epoch"])) or decision
+            if not bool(decision.get("trade_executed")):
                 return decision
             epoch = int(decision["betting_epoch"])
             stake_bnb = float(decision.get("stake_bnb") or 0.0)
             bet_gas = float(decision.get("bet_gas_fee_bnb") or 0.0)
             bet_price = float(decision.get("bnb_usd_price") or bnb_usd_price)
             outcome = str(decision.get("outcome") or "").upper()
+            if not bool(decision.get("settled")):
+                _, refundable = self._claim_flags(epoch)
+                if not refundable:
+                    return decision
+                decision = db.update_execution(epoch, settled=True, outcome="REFUND")
+                outcome = "REFUND"
             if outcome == "LOSS":
                 pnl_bnb = -(stake_bnb + bet_gas)
                 return db.update_execution(
@@ -469,7 +503,11 @@ class LiveExecutor:
                 before = float(tx.get("balance_before_bnb") or 0.0)
                 after = self.wallet_snapshot(bnb_usd_price, source="CLAIM", force=True)
                 after_bnb = float(after.get("balance_bnb") or 0.0)
-                payout = max(0.0, after_bnb - before + gas_fee)
+                events = self.client._call(lambda w3: self._contract(w3).events.Claim().process_receipt(receipt))
+                payouts = [int(e["args"]["amount"]) for e in events if int(e["args"]["epoch"]) == epoch and str(e["args"]["sender"]).lower() == str(self.address).lower() and str(e["address"]).lower() == SETTINGS.prediction_contract.lower()]
+                if len(payouts) != 1:
+                    return db.update_execution(epoch, reconciliation_status="CLAIM_LOG_MISSING", execution_error="Cannot verify exact claim payout")
+                payout = float(Decimal(payouts[0]) / Decimal(10**18))
                 pnl_bnb = payout - stake_bnb - bet_gas - gas_fee
                 pnl_usd = payout * bnb_usd_price - (stake_bnb + bet_gas) * bet_price - gas_fee * bnb_usd_price
                 db.upsert_transaction(
@@ -500,15 +538,15 @@ class LiveExecutor:
             ledger = self.ledger(epoch)
             if ledger["claimed"]:
                 round_data = self.client.round(epoch)
-                payout = 0.0
-                if round_data.reward_base_bnb > 0 and round_data.reward_amount_bnb > 0:
+                payout = stake_bnb if outcome == "REFUND" else 0.0
+                if outcome != "REFUND" and round_data.reward_base_bnb > 0 and round_data.reward_amount_bnb > 0:
                     payout = stake_bnb * round_data.reward_amount_bnb / round_data.reward_base_bnb
                 pnl_bnb = payout - stake_bnb - bet_gas
                 return db.update_execution(
                     epoch,
                     actual_payout_bnb=payout,
-                    actual_pnl_bnb=pnl_bnb,
-                    actual_pnl_usd=payout * bnb_usd_price - (stake_bnb + bet_gas) * bet_price,
+                    actual_pnl_bnb=None,
+                    actual_pnl_usd=None,
                     reconciliation_status="EXTERNAL_CLAIM_PAYOUT_RECONSTRUCTED_GAS_UNKNOWN",
                 )
             claimable, refundable = self._claim_flags(epoch)
@@ -561,7 +599,7 @@ class LiveExecutor:
                     }
                 )
                 return db.update_execution(epoch, reconciliation_status="CLAIM_PENDING")
-            return self.finalize_actual(db.get_decision(epoch) or decision, bnb_usd_price)
+            return db.get_decision(epoch) or decision
 
 
 _EXECUTOR: LiveExecutor | None = None

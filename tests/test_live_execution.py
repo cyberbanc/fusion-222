@@ -1,4 +1,11 @@
 from types import SimpleNamespace
+from contextlib import nullcontext
+import pytest
+
+@pytest.fixture(autouse=True)
+def isolate_db(monkeypatch):
+    monkeypatch.setattr(live_execution.db, "execution_lock", lambda wallet: nullcontext())
+    monkeypatch.setattr(live_execution.db, "get_decision", lambda epoch: None)
 
 from app import live_execution
 
@@ -47,6 +54,6 @@ def test_existing_contract_ledger_prevents_duplicate_send(monkeypatch):
         {"betting_epoch": 123, "execution_requested": True, "signal": "UP", "stake": 22},
         600.0,
     )
-    assert result["trade_executed"] is True
-    assert result["execution_status"] == "RECONCILED"
-    assert result["reconciliation_status"] == "CONTRACT_LEDGER_MATCH"
+    assert result["trade_executed"] is False
+    assert result["execution_status"] == "BLOCKED"
+    assert result["reconciliation_status"] == "EXTERNAL_BET_DETECTED"

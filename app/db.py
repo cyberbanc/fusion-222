@@ -194,7 +194,7 @@ def _resolve_base_tables(cur) -> None:
     )
     # Round history is safe to create if no legacy round table exists; the
     # decisions history is not.
-    _ROUNDS_TABLE = resolved_rounds or (
+    _ROUNDS_TABLE = (SETTINGS.base_rounds_table if SETTINGS.base_rounds_table.startswith("fusion222_uponly_real_") else resolved_rounds) or (
         SETTINGS.base_rounds_table
         if str(SETTINGS.base_rounds_table or "").strip().lower() not in {"", "auto"}
         else "round_history"
@@ -936,6 +936,7 @@ def insert_decision(data: dict[str, Any]) -> dict[str, Any]:
 
 
 _EXECUTION_FIELDS = {
+    "stake", "bank_before", "stake_tier", "stake_mode", "settled", "outcome",
     "execution_requested",
     "execution_status",
     "wallet_address",
@@ -1070,6 +1071,7 @@ def actual_trade_metrics() -> dict[str, Any]:
                     COUNT(*) FILTER (WHERE COALESCE(execution_requested,FALSE)=TRUE) AS requested_count,
                     COUNT(*) FILTER (WHERE COALESCE(trade_executed,FALSE)=TRUE) AS executed_count,
                     COUNT(*) FILTER (WHERE COALESCE(trade_executed,FALSE)=TRUE AND COALESCE(settled,FALSE)=TRUE) AS settled_count,
+                    COUNT(*) FILTER (WHERE COALESCE(trade_executed,FALSE)=TRUE AND actual_pnl_bnb IS NULL) AS unreconciled_count,
                     COUNT(*) FILTER (WHERE outcome='WIN' AND COALESCE(trade_executed,FALSE)=TRUE) AS wins,
                     COUNT(*) FILTER (WHERE outcome='LOSS' AND COALESCE(trade_executed,FALSE)=TRUE) AS losses,
                     COALESCE(SUM(actual_pnl_bnb),0) AS actual_pnl_bnb,
@@ -1187,8 +1189,7 @@ def actual_reconciliation_candidates(limit: int = 50) -> list[dict[str, Any]]:
             sql.SQL(
                 """
                 SELECT * FROM {}
-                WHERE COALESCE(settled,FALSE)=TRUE
-                  AND COALESCE(trade_executed,FALSE)=TRUE
+                WHERE COALESCE(trade_executed,FALSE)=TRUE
                   AND actual_pnl_bnb IS NULL
                 ORDER BY betting_epoch ASC LIMIT %s
                 """
@@ -1524,3 +1525,22 @@ def table_names() -> dict[str, str]:
         "transactions": _TRANSACTIONS_TABLE,
         "wallet_snapshots": _WALLET_SNAPSHOTS_TABLE,
     }
+
+
+@contextmanager
+def execution_lock(wallet: str):
+    """One PostgreSQL session lock for all signing with this wallet/chain.
+
+    Held across send and receipt persistence; released by PostgreSQL on crash.
+    No transaction sends occur if the DB lock cannot be acquired.
+    """
+    import hashlib
+    key = int.from_bytes(hashlib.sha256(f"{SETTINGS.chain_id}:{wallet.lower()}".encode()).digest()[:8], "big", signed=True)
+    with conn() as c, c.cursor() as cur:
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (key,))
+        if not bool(_first_scalar(cur.fetchone())):
+            raise RuntimeError("Another executor holds the wallet lock")
+        try:
+            yield
+        finally:
+            cur.execute("SELECT pg_advisory_unlock(%s)", (key,))

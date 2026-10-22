@@ -7,6 +7,7 @@ from typing import Any
 
 from . import db
 from .config import SETTINGS
+from .stake_policy import POLICY
 from .ensemble import forecast
 from .live_execution import from_env as live_executor_from_env
 from .pancake_client import PancakeClient, from_env
@@ -104,9 +105,10 @@ def settle_finished(client: PancakeClient, current_epoch: int | None = None) -> 
             stake = float(decision.get("stake") or 0.0)
 
             if winner == "DRAW":
-                outcome = "REFUND" if trade_executed else "SKIP"
-                pnl = 0.0
-                shadow_pnl = 0.0
+                # Equal lock/close is HOUSE WIN in this contract, not refund.
+                outcome = "LOSS" if trade_executed else "SKIP"
+                pnl = -stake if trade_executed else 0.0
+                shadow_pnl = -SETTINGS.shadow_stake
             elif signal == winner:
                 outcome = "WIN" if trade_executed else "SKIP"
                 selected_coeff = coeff_up if signal == "UP" else coeff_down
@@ -157,6 +159,8 @@ def settle_finished(client: PancakeClient, current_epoch: int | None = None) -> 
 
 
 def create_locked_decision(snapshot) -> dict[str, Any]:
+    if SETTINGS.execution_mode == "REAL":
+        return create_mirrored_decision(snapshot)
     existing = db.get_decision(snapshot.betting_epoch)
     if existing:
         return existing
@@ -170,7 +174,10 @@ def create_locked_decision(snapshot) -> dict[str, Any]:
 
     allowed = True
     no_trade_reason: str | None = None
-    if SETTINGS.require_payout_bucket_ready and not selected_ready:
+    if result.signal != "UP":
+        allowed = False
+        no_trade_reason = "DOWN_SKIPPED_UP_ONLY"
+    elif SETTINGS.require_payout_bucket_ready and not selected_ready:
         allowed = False
         no_trade_reason = "PAYOUT_BUCKET_NOT_READY"
     elif float(result.selected_ev) < SETTINGS.min_trade_ev:
@@ -213,7 +220,7 @@ def create_locked_decision(snapshot) -> dict[str, Any]:
             "quality_win_rate_filter_enabled": SETTINGS.quality_win_rate_filter_enabled,
             "quality_min_profit_factor": SETTINGS.quality_min_profit_factor,
             "selected_payout_bucket_ready": selected_ready,
-            "stake_mode": "fixed_22",
+            "stake_mode": POLICY["mode"],
             "stake_tier": stake_tier,
         }
     )
@@ -254,7 +261,7 @@ def create_locked_decision(snapshot) -> dict[str, Any]:
             "shadow_allowed": shadow_allowed,
             "shadow_reason": shadow_reason,
             "shadow_stats_json": shadow_stats,
-            "stake_mode": "fixed_22",
+            "stake_mode": POLICY["mode"],
             "stake_tier": stake_tier,
             "breaker_applied": False,
             "origin": "LIVE",
@@ -283,8 +290,10 @@ def create_mirrored_decision(snapshot) -> dict[str, Any] | None:
         return None
 
     paper_executed = bool(reference.get("trade_executed"))
-    stake = float(reference.get("stake") or 0.0) if paper_executed else 0.0
-    execution_requested = paper_executed and stake > 0.0
+    up = str(reference.get("signal") or "").upper() == "UP"
+    # Paper stake and paper bank are never a real-money sizing input.
+    execution_requested = paper_executed and up and not bool(reference.get("breaker_applied"))
+    stake = 0.0  # Filled from fresh on-chain wallet balance immediately before signing.
     features = dict(reference.get("features_json") or {})
     features.update(
         {
@@ -317,7 +326,7 @@ def create_mirrored_decision(snapshot) -> dict[str, Any] | None:
             "agreement": reference.get("agreement"),
             "decision_quality": reference.get("decision_quality"),
             "stake": stake,
-            "bank_before": reference.get("bank_before"),
+            "bank_before": None,
             "components_json": reference.get("components_json") or [],
             "weights_json": reference.get("weights_json") or {},
             "features_json": features,
@@ -326,22 +335,20 @@ def create_mirrored_decision(snapshot) -> dict[str, Any] | None:
             "raw_expected_coeff_down": reference.get("raw_expected_coeff_down"),
             "payout_correction_up": reference.get("payout_correction_up"),
             "payout_correction_down": reference.get("payout_correction_down"),
-            "strategy_version": reference.get("strategy_version"),
+            "strategy_version": SETTINGS.version,
             "payout_bucket_up": reference.get("payout_bucket_up"),
             "payout_bucket_down": reference.get("payout_bucket_down"),
             # A real trade becomes executed only after its receipt is confirmed.
             "trade_executed": False,
-            "no_trade_reason": reference.get("no_trade_reason"),
+            "no_trade_reason": ("DOWN_SKIPPED_UP_ONLY" if not up else reference.get("no_trade_reason")),
             "source_key": reference.get("source_key"),
             "selection_reason": reference.get("selection_reason"),
             "shadow_allowed": reference.get("shadow_allowed"),
             "shadow_reason": reference.get("shadow_reason"),
             "shadow_stats_json": reference.get("shadow_stats_json") or {},
-            "stake_mode": reference.get("stake_mode") or "fixed_22",
-            "stake_tier": reference.get("stake_tier") or (
-                "FIXED_22" if execution_requested else "NO_TRADE"
-            ),
-            "breaker_applied": bool(reference.get("breaker_applied")),
+            "stake_mode": POLICY["mode"],
+            "stake_tier": "AWAITING_WALLET" if execution_requested else "NO_TRADE",
+            "breaker_applied": False,
             "origin": "LIVE_REAL_MIRROR",
             "execution_requested": execution_requested,
             "execution_status": "PENDING" if execution_requested else "SKIPPED",
@@ -434,7 +441,7 @@ def tick() -> dict[str, Any]:
             "decision_signal": decision.get("signal") if decision else None,
             "no_trade_reason": decision.get("no_trade_reason") if decision else None,
             "stake": float(decision.get("stake") or 0) if decision else 0.0,
-            "stake_mode": "fixed_22",
+            "stake_mode": POLICY["mode"],
             "fixed_stake": SETTINGS.fixed_stake,
             "min_trade_ev": SETTINGS.min_trade_ev,
             "min_signal_probability": SETTINGS.min_signal_probability,
@@ -476,9 +483,11 @@ def status() -> dict[str, Any]:
     state = db.get_state() if db.enabled() else {}
     return {
         "enabled": SETTINGS.worker_enabled,
-        "strategy": "fusion_222_ev2_prob53_shadow_recent_quality_pf_fixed22",
+        "up_only": True,
+        "stake_policy": POLICY,
+        "strategy": "fusion_222_only_up_ev2_prob53_shadow_recent_quality_pf_tiers22_44_88",
         "version": SETTINGS.version,
-        "stake_mode": "fixed_22",
+        "stake_mode": POLICY["mode"],
         "fixed_stake": SETTINGS.fixed_stake,
         "min_trade_ev": SETTINGS.min_trade_ev,
         "min_signal_probability": SETTINGS.min_signal_probability,

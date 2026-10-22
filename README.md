@@ -1,3 +1,13 @@
+# FUSION-222 ONLY UP · REAL
+
+Active branch: `live-only-up`. See [ONLY_UP_REAL.md](ONLY_UP_REAL.md) for
+the current tier policy, isolated database tables and deployment controls.
+
+---
+
+The previous real-service documentation is retained below for historical context.
+Its fixed-$22 and reference-table settings are superseded by ONLY_UP_REAL.md.
+
 # FUSION-222 REAL v1.0.0
 
 Isolated real-money PancakeSwap Prediction service. It mirrors each exact,
