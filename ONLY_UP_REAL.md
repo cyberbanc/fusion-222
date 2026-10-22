@@ -47,6 +47,18 @@ movements, never claimed as trading PnL. No retrospective trades initialize the
 real history. Paper PnL columns are not real accounting; Sites uses only
 `actual_*` fields.
 
+## Security prerequisite (22 October 2026)
+
+Railway disclosed possible access to customer environment secrets on
+[21 October 2026](https://blog.railway.com/p/security-disclosure-wednesday-october-21st)
+and recommends rotation. The previously configured wallet is retired by this
+executor: it cannot sign even if live flags are enabled. The owner must create
+a fresh wallet independently and set its new key/address directly in the secure
+runtime configuration. Do not reuse the old key, send a key in chat, or fund the
+old wallet for this bot. This is a precaution following a concrete disclosure,
+not a finding that this particular wallet was accessed. Database credentials
+stored at the provider also require rotation/review before production use.
+
 ## Deployment / owner controls
 
 Production must initially use:

@@ -98,6 +98,9 @@ class Settings:
     real_execution_enabled: bool = _bool("REAL_EXECUTION_ENABLED", False)
     mirror_paper_decisions: bool = _bool("MIRROR_PAPER_DECISIONS", True)
     wallet_private_key: str = os.getenv("WALLET_PRIVATE_KEY", "").strip()
+    # Retire the wallet whose signing key was stored before the published
+    # Railway environment-secret incident. A new key implies a new address.
+    retired_wallet_addresses: tuple[str, ...] = ("0x23a20FAf88Df055e1Ed826DE46dF8ED441f223bD",)
     expected_wallet_address: str = os.getenv("WALLET_ADDRESS", "").strip()
     chain_id: int = _int("CHAIN_ID", 56)
     min_gas_reserve_bnb: float = _float("MIN_GAS_RESERVE_BNB", 0.003)

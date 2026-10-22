@@ -46,6 +46,10 @@ class LiveExecutor:
             return
         try:
             account = Account.from_key(key)
+            if account.address.lower() in {a.lower() for a in SETTINGS.retired_wallet_addresses}:
+                self._configuration_error = "Previously configured wallet must be replaced after Railway security disclosure 2026-10-21"
+                self._account = None
+                return
             expected = SETTINGS.expected_wallet_address
             if expected and Web3.to_checksum_address(expected) != account.address:
                 raise ValueError("WALLET_ADDRESS does not match WALLET_PRIVATE_KEY")
@@ -347,6 +351,9 @@ class LiveExecutor:
             )
             if paused or value_wei < min_bet_wei:
                 return db.update_execution(epoch, execution_status="BLOCKED", execution_error="Contract paused or stake below contract minimum")
+            reserve_wei = int(Web3.to_wei(SETTINGS.min_gas_reserve_bnb, "ether"))
+            if balance_before_wei < value_wei + reserve_wei:
+                return db.update_execution(epoch, execution_status="BLOCKED", stake=quote["stake_usd"], stake_tier=quote["stake_tier"], bank_before=quote["bank_usd"], execution_error="Insufficient BNB for selected tier and reserve", trade_executed=False)
             fn = lambda w3: self._contract(w3).functions.betBull(epoch)
             signed, tx_hash, nonce, gas, gas_price = self._build_sign(fn, value_wei=value_wei)
             reserve_wei = int(Web3.to_wei(SETTINGS.min_gas_reserve_bnb, "ether"))
@@ -493,8 +500,11 @@ class LiveExecutor:
                 if receipt is None:
                     return db.update_execution(epoch, reconciliation_status="CLAIM_PENDING")
                 if int(receipt.get("status") or 0) != 1:
+                    gas_fee = self._gas_fee_bnb(receipt)
+                    db.upsert_transaction({"event_type": "CLAIM", "betting_epoch": epoch, "tx_hash": claim_hash, "tx_status": "REVERTED", "wallet_address": self.address, "amount_bnb": 0.0, "gas_fee_bnb": gas_fee, "bnb_usd_price": bnb_usd_price, "metadata_json": {}})
                     return db.update_execution(
                         epoch,
+                        claim_gas_fee_bnb=gas_fee,
                         reconciliation_status="CLAIM_REVERTED",
                         execution_error="On-chain claim transaction reverted",
                     )

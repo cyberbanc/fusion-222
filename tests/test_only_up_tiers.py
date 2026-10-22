@@ -153,3 +153,19 @@ def test_missing_claim_event_never_invents_payout(executor,monkeypatch):
     result=e.finalize_actual(state,500)
     assert result['reconciliation_status']=='CLAIM_LOG_MISSING'
     assert result.get('actual_pnl_bnb') is None
+
+
+def test_pre_incident_wallet_is_retired_even_with_live_flags(monkeypatch):
+    settings=replace(le.SETTINGS,worker_enabled=True,real_execution_enabled=True,wallet_private_key='test-placeholder-not-a-real-key')
+    monkeypatch.setattr(le,'SETTINGS',settings)
+    monkeypatch.setattr(le.Account,'from_key',lambda key:NS(address=settings.retired_wallet_addresses[0]))
+    e=le.LiveExecutor(NS())
+    assert not e.ready
+    assert 'must be replaced' in e.status()['configuration_error']
+
+
+def test_new_wallet_can_pass_config_when_owner_supplies_it(monkeypatch):
+    address='0x0000000000000000000000000000000000000001'
+    monkeypatch.setattr(le,'SETTINGS',replace(le.SETTINGS,worker_enabled=True,real_execution_enabled=True,wallet_private_key='test-placeholder-not-a-real-key',expected_wallet_address=address))
+    monkeypatch.setattr(le.Account,'from_key',lambda key:NS(address=address))
+    assert le.LiveExecutor(NS()).ready

