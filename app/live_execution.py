@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 import math
 import threading
 import time
@@ -12,8 +14,26 @@ from web3.exceptions import TimeExhausted, TransactionNotFound
 
 from . import db
 from .config import SETTINGS
+from .execution_diagnostics import CURRENT_TRACE, ExecutionTrace, span
 from .stake_policy import POLICY, stake_quote
 from .pancake_client import PancakeClient, from_env as pancake_from_env
+
+
+_LOG = logging.getLogger(__name__)
+_LOG.setLevel(logging.INFO)
+
+
+def window_rejection(snapshot, epoch):
+    if snapshot.betting_epoch != epoch:
+        return "ROUND_CHANGED"
+    if not snapshot.decision_window:
+        remaining = getattr(snapshot, "seconds_to_lock", None)
+        if remaining is not None and remaining < SETTINGS.min_decision_seconds:
+            return "WINDOW_TOO_LATE"
+        if remaining is not None and remaining > SETTINGS.prelock_seconds:
+            return "WINDOW_TOO_EARLY"
+        return "WINDOW_INVALID"
+    return None
 
 
 def _hex(value: Any) -> str:
@@ -84,6 +104,7 @@ class LiveExecutor:
 
     def status(self) -> dict[str, Any]:
         return {
+            "last_execution_diagnostics": getattr(self, "_last_execution_diagnostics", None),
             "mode": SETTINGS.execution_mode,
             "up_only": True,
             "stake_policy": POLICY,
@@ -104,14 +125,15 @@ class LiveExecutor:
     def _balance_wei(self, address: str) -> int:
         return int(self.client._call(lambda w3: w3.eth.get_balance(address)))
 
-    def wallet_snapshot(self, bnb_usd_price: float, *, source: str = "POLL", force: bool = False) -> dict[str, Any]:
+    def wallet_snapshot(self, bnb_usd_price: float, *, source: str = "POLL", force: bool = False,
+                        client: PancakeClient | None = None) -> dict[str, Any]:
         address = self.address
         if not address or not bnb_usd_price or bnb_usd_price <= 0:
             return dict(self._last_wallet)
         now = time.time()
         if not force and self._last_wallet and now - self._last_wallet_sync < SETTINGS.wallet_sync_seconds:
             return dict(self._last_wallet)
-        balance_wei, block_number = self.client._call(
+        balance_wei, block_number = (client or self.client)._call(
             lambda w3: (w3.eth.get_balance(address), w3.eth.block_number)
         )
         balance_bnb = float(Web3.from_wei(int(balance_wei), "ether"))
@@ -304,13 +326,43 @@ class LiveExecutor:
             )
         return decision
 
-    def execute_bet(self, decision: dict[str, Any], bnb_usd_price: float) -> dict[str, Any]:
+    def execute_bet(self, decision: dict[str, Any], bnb_usd_price: float,
+                    *, tick_context: dict[str, Any] | None = None) -> dict[str, Any]:
+        trace = ExecutionTrace(int(decision["betting_epoch"]), tick_context)
+        token = CURRENT_TRACE.set(trace)
+        result = None
+        error_type = None
+        try:
+            result = self._execute_bet(decision, bnb_usd_price)
+            return result
+        except Exception as exc:
+            error_type = type(exc).__name__
+            raise
+        finally:
+            CURRENT_TRACE.reset(token)
+            diagnostic = trace.finish((result or {}).get("execution_status", "ERROR"), error_type)
+            self._last_execution_diagnostics = diagnostic
+            # Outside the signing lock and network path; diagnostics must never
+            # mask a submission result or cause a replacement transaction.
+            _LOG.info("execution_diagnostics %s", json.dumps(diagnostic, separators=(",", ":")))
+            try:
+                db.record_execution_diagnostics(int(decision["betting_epoch"]), diagnostic)
+            except Exception as exc:
+                _LOG.warning("execution_diagnostics_persist_failed epoch=%s type=%s",
+                             decision["betting_epoch"], type(exc).__name__)
+
+    def _execute_bet(self, decision: dict[str, Any], bnb_usd_price: float) -> dict[str, Any]:
+        trace = CURRENT_TRACE.get()
+        lock_started = time.monotonic()
         with self._lock, db.execution_lock(self.address or "unconfigured"):
+            if trace is not None:
+                trace.data["wallet_lock_wait_ms"] = round((time.monotonic() - lock_started) * 1000, 3)
             epoch = int(decision["betting_epoch"])
             decision = db.get_decision(epoch) or decision
             if not bool(decision.get("execution_requested")):
                 return decision
-            reconciled = self.reconcile_bet(decision, bnb_usd_price)
+            with span("reconcile_existing_bet"):
+                reconciled = self.reconcile_bet(decision, bnb_usd_price)
             if bool(reconciled.get("trade_executed")) or reconciled.get("tx_hash") or reconciled.get("reconciliation_status") == "EXTERNAL_BET_DETECTED":
                 return reconciled
             if not self.ready:
@@ -332,9 +384,13 @@ class LiveExecutor:
             reference = db.get_reference_decision(epoch)
             if not reference or not reference.get("trade_executed") or reference.get("signal") != "UP" or reference.get("breaker_applied"):
                 return db.update_execution(epoch, execution_status="BLOCKED", execution_error="No eligible ONLY UP reference for this epoch")
-            snapshot = self.client.market_snapshot()
-            if not snapshot.decision_window or snapshot.betting_epoch != epoch:
-                return db.update_execution(epoch, execution_status="BLOCKED", execution_error="Round changed or betting window closed")
+            with span("initial_execution_snapshot"):
+                snapshot = self.client.market_snapshot()
+            trace.snapshot("initial", snapshot)
+            rejection = window_rejection(snapshot, epoch)
+            if rejection:
+                trace.data["blocked_reason"] = rejection
+                return db.update_execution(epoch, execution_status="BLOCKED", execution_error=f"Round changed or betting window closed: {rejection}")
             if not (0 <= snapshot.chain_timestamp - snapshot.oracle_updated_at <= SETTINGS.oracle_max_age_seconds):
                 return db.update_execution(epoch, execution_status="BLOCKED", execution_error="Stale or future BNB/USD oracle")
             bnb_usd_price = snapshot.chainlink_price
@@ -355,7 +411,8 @@ class LiveExecutor:
             if balance_before_wei < value_wei + reserve_wei:
                 return db.update_execution(epoch, execution_status="BLOCKED", stake=quote["stake_usd"], stake_tier=quote["stake_tier"], bank_before=quote["bank_usd"], execution_error="Insufficient BNB for selected tier and reserve", trade_executed=False)
             fn = lambda w3: self._contract(w3).functions.betBull(epoch)
-            signed, tx_hash, nonce, gas, gas_price = self._build_sign(fn, value_wei=value_wei)
+            with span("estimate_and_sign"):
+                signed, tx_hash, nonce, gas, gas_price = self._build_sign(fn, value_wei=value_wei)
             reserve_wei = int(Web3.to_wei(SETTINGS.min_gas_reserve_bnb, "ether"))
             required_wei = value_wei + gas * gas_price + reserve_wei + SETTINGS.claim_gas_budget * gas_price
             if balance_before_wei < required_wei:
@@ -373,7 +430,9 @@ class LiveExecutor:
                 return db.update_execution(epoch, execution_status="BLOCKED", execution_error="EV below 2% after own-pool impact and gas", trade_executed=False)
             # Recheck after RPC estimation/signing; a changed tier is retried on
             # a later tick, without persisting or broadcasting this signed payload.
-            final = self.client.market_snapshot()
+            with span("final_execution_snapshot"):
+                final = self.client.market_snapshot()
+            trace.snapshot("pre_send", final)
             final_balance = self._balance_wei(self.address or "")
             final_quote = stake_quote(final_balance, final.chainlink_price)
             if (final.betting_epoch != epoch or not final.decision_window
@@ -381,7 +440,14 @@ class LiveExecutor:
                 or final_quote["stake_tier"] != quote["stake_tier"]
                 or abs(final.chainlink_price / bnb_usd_price - 1) > 0.001
                 or final_balance < required_wei):
-                return db.update_execution(epoch, execution_status="BLOCKED", execution_error="Pre-send window, wallet tier, price or funds changed")
+                trace.data["blocked_reason"] = window_rejection(final, epoch) or "PRE_SEND_STATE_CHANGED"
+                trace.data["pre_send_checks"] = {
+                    "oracle_fresh": 0 <= final.chain_timestamp - final.oracle_updated_at <= SETTINGS.oracle_max_age_seconds,
+                    "tier_unchanged": final_quote["stake_tier"] == quote["stake_tier"],
+                    "price_within_limit": abs(final.chainlink_price / bnb_usd_price - 1) <= 0.001,
+                    "funds_sufficient": final_balance >= required_wei,
+                }
+                return db.update_execution(epoch, execution_status="BLOCKED", execution_error=f"Pre-send window, wallet tier, price or funds changed: {trace.data['blocked_reason']}")
             final_pool = final.betting_round
             final_coeff = (final_pool.total_amount_bnb + amount) / (final_pool.bull_amount_bnb + amount) * (1 - treasury_bps / 10000)
             final_coeff = min(float(decision.get("expected_coeff_up") or 0), final_coeff * float(decision.get("payout_correction_up") or SETTINGS.payout_haircut))

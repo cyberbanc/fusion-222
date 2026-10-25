@@ -88,3 +88,24 @@ It does not contain the signing secret or any transaction-execution route.
 Local verification uses mocked chain/DB objects, never a real wallet transaction.
 The real signed/broadcast path is not production-money tested. Model probability
 and current pool EV cannot guarantee future profit or the final locked payout.
+
+## Entry scheduling and diagnostics (25 October 2026)
+
+REAL handles the current mirrored decision before settlement, round-cache sync,
+wallet display polling or claims. Background work is deferred near the entry
+window, with a guard for the configured receipt timeout, and has a five-second
+cooperative batch budget outside that guard. An in-flight RPC can still exceed
+the batch budget; it retains its normal provider timeout. Interrupted round
+cache sweeps retry newest rounds first. Paper ordering and signal rules are
+unchanged. REAL startup skips the display-only 160-round bootstrap; settlement
+and bounded sync populate its isolated cache. Dashboard preflight reads use a
+separate provider client/lock, including wallet reads.
+
+Each execution attempt records stage/RPC durations, lock waits, observed and
+expected epoch, chain time, seconds to lock and specific window rejection in
+the real decision's `features_json.execution_diagnostics` and runtime logs.
+The trace excludes RPC URLs, request payloads, exception messages and signing
+material; RPC entries are capped at 64. Diagnostic persistence cannot change
+the returned submission result. The existing 8–40 second window, stake tiers,
+freshness/EV/funds/nonce checks and persisted-hash duplicate protection remain.
+Network availability and block inclusion cannot be guaranteed.

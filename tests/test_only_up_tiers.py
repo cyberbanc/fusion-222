@@ -46,6 +46,7 @@ def executor(monkeypatch):
     monkeypatch.setattr(le.db,'get_reference_decision',lambda epoch:{'trade_executed':True,'signal':'UP'})
     monkeypatch.setattr(le.db,'update_execution',update)
     monkeypatch.setattr(le.db,'upsert_transaction',lambda data:data)
+    monkeypatch.setattr(le.db,'record_execution_diagnostics',lambda epoch,data:None)
     monkeypatch.setattr(e,'reconcile_bet',lambda decision,price:decision)
     monkeypatch.setattr(e,'_balance_wei',lambda address:wei(3))
     monkeypatch.setattr(e,'_build_sign',lambda fn,**kw:(NS(), '0xtest',1,100000,10**9))
@@ -103,6 +104,57 @@ def test_existing_hash_never_resigns_or_broadcasts(executor,monkeypatch):
     monkeypatch.setattr(e,'_build_sign',lambda *a,**k:pytest.fail('duplicate signing'))
     assert e.execute_bet(state,500)['tx_hash']=='0xknown'
     assert not sends
+
+
+@pytest.mark.parametrize('epoch,seconds,reason', [
+    (124,30,'ROUND_CHANGED'), (123,7,'WINDOW_TOO_LATE'),
+    (123,41,'WINDOW_TOO_EARLY'),
+])
+def test_window_rejection_records_actual_chain_state(executor,monkeypatch,epoch,seconds,reason):
+    e,snap,state,sends=executor
+    snap.betting_epoch=epoch
+    snap.seconds_to_lock=seconds
+    snap.decision_window=False
+    snap.betting_round.lock_timestamp=1000+seconds
+    recorded=[]
+    monkeypatch.setattr(le.db,'record_execution_diagnostics',lambda epoch,data:recorded.append(data))
+    monkeypatch.setattr(e,'_build_sign',lambda *a,**k:pytest.fail('signed outside window'))
+    result=e.execute_bet(state,500,tick_context={'before_execute_ms':12})
+    assert reason in result['execution_error']
+    assert not sends
+    assert recorded[0]['blocked_reason']==reason
+    assert recorded[0]['gates'][0]['expected_epoch']==123
+    assert recorded[0]['gates'][0]['observed_epoch']==epoch
+    assert recorded[0]['gates'][0]['seconds_to_lock']==seconds
+    assert recorded[0]['tick']['before_execute_ms']==12
+
+
+def test_window_expires_during_signing_never_broadcasts(executor,monkeypatch):
+    e,snap,state,sends=executor
+    final=NS(**vars(snap))
+    final.seconds_to_lock=7
+    final.decision_window=False
+    snapshots=iter([snap,final])
+    e.client.market_snapshot=lambda:next(snapshots)
+    result=e.execute_bet(state,500)
+    assert result['execution_status']=='BLOCKED'
+    assert 'WINDOW_TOO_LATE' in result['execution_error']
+    assert e.status()['last_execution_diagnostics']['gates'][-1]['stage']=='pre_send'
+    assert not sends
+    assert not state.get('tx_hash')
+
+
+def test_diagnostic_failure_cannot_replace_or_mask_submitted_bet(executor,monkeypatch):
+    e,snap,state,sends=executor
+    def broken_diagnostics(*args):
+        raise RuntimeError('database unavailable')
+    monkeypatch.setattr(le.db,'record_execution_diagnostics',broken_diagnostics)
+    result=e.execute_bet(state,500)
+    assert result['execution_status']=='SUBMITTED'
+    assert result['tx_hash']=='0xtest'
+    assert sends==['0xtest']
+    e.execute_bet(result,500)
+    assert sends==['0xtest']
 
 
 def test_forged_or_missing_reference_blocks(executor,monkeypatch):

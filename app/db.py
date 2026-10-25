@@ -976,6 +976,20 @@ def update_execution(epoch: int, **fields: Any) -> dict[str, Any]:
         return dict(row) if row else {}
 
 
+def record_execution_diagnostics(epoch: int, diagnostic: dict[str, Any]) -> None:
+    """Merge only diagnostics into an existing real decision; no history rewrite."""
+    if SETTINGS.execution_mode != "REAL":
+        return
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            sql.SQL("UPDATE {} SET features_json=jsonb_set(COALESCE(features_json, '{{}}'::jsonb), "
+                    "'{{execution_diagnostics}}', %s::jsonb, true) WHERE betting_epoch=%s").format(
+                _ident(_DECISIONS_TABLE)),
+            (Json(diagnostic), int(epoch)),
+        )
+        c.commit()
+
+
 def upsert_transaction(data: dict[str, Any]) -> dict[str, Any]:
     columns = [
         "event_type",

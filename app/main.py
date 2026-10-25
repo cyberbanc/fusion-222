@@ -19,13 +19,13 @@ from .stake_policy import POLICY, stake_quote
 import threading
 import time
 from .live_execution import from_env as live_executor_from_env
-from .pancake_client import from_env
+from .pancake_client import from_env, observer_from_env
 from .shadow import summarize
 from .worker import bootstrap_rounds, loop, signal_cache, status as worker_status
 
 _STOP: Optional[asyncio.Event] = None
 _TASK: Optional[asyncio.Task] = None
-_BUILD_REVISION = "fusion-222-only-up-real-v2-tiers-22-44-88"
+_BUILD_REVISION = "fusion-222-only-up-real-v2-execution-timing-20261025"
 _DASHBOARD_PATH = Path(__file__).resolve().parent.parent / "TILDA_FUSION_222_REAL.html"
 
 
@@ -45,10 +45,14 @@ def _json_safe(value: Any) -> Any:
 async def lifespan(app: FastAPI):
     global _STOP, _TASK
     db.init_db()
-    try:
-        await asyncio.wait_for(asyncio.to_thread(bootstrap_rounds, from_env()), timeout=45)
-    except Exception:
-        pass
+    # REAL mirrors a ready paper signal. A 160-round bootstrap is display work,
+    # and wait_for cannot stop the underlying RPC thread after its timeout.
+    # Relevant real rounds are populated by settlement and the bounded sync.
+    if SETTINGS.execution_mode != "REAL":
+        try:
+            await asyncio.wait_for(asyncio.to_thread(bootstrap_rounds, from_env()), timeout=45)
+        except Exception:
+            pass
     if SETTINGS.worker_enabled:
         _STOP = asyncio.Event()
         _TASK = asyncio.create_task(loop(_STOP))
@@ -116,7 +120,7 @@ def healthz():
 
 @app.get("/health")
 def health():
-    client = from_env()
+    client = observer_from_env()
     return {
         "ok": True,
         "service": SETTINGS.service_name,
@@ -125,7 +129,7 @@ def health():
         "connected": client.is_connected(),
         "database_connected": db.ping(),
         "worker": worker_status(),
-        "execution": live_executor_from_env(client).status(),
+        "execution": live_executor_from_env().status(),
         "tables": db.table_names(),
         "fixed_stake": None,
         "min_trade_ev": SETTINGS.min_trade_ev,
@@ -373,10 +377,10 @@ def preflight():
         if _PREFLIGHT_CACHE and time.monotonic() - _PREFLIGHT_AT < 10:
             return _PREFLIGHT_CACHE
         try:
-            client = from_env()
+            client = observer_from_env()
             snap = client.market_snapshot()
-            executor = live_executor_from_env(client)
-            wallet = executor.wallet_snapshot(snap.chainlink_price, source="READ_ONLY_MONITOR", force=True)
+            executor = live_executor_from_env()
+            wallet = executor.wallet_snapshot(snap.chainlink_price, source="READ_ONLY_MONITOR", force=True, client=client)
             if "balance_bnb" not in wallet:
                 raise RuntimeError("Wallet address or balance is unavailable")
             quote = stake_quote(int(Decimal(str(wallet["balance_bnb"])) * Decimal(10**18)), snap.chainlink_price)

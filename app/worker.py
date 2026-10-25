@@ -61,7 +61,7 @@ def bootstrap_rounds(client: PancakeClient) -> dict[str, Any]:
     return {"saved": saved, "current_epoch": current}
 
 
-def sync_recent_closed(client: PancakeClient, current_epoch: int) -> dict[str, Any] | None:
+def sync_recent_closed(client: PancakeClient, current_epoch: int, *, can_continue=None) -> dict[str, Any] | None:
     global _LAST_SYNC_AT
     now = time.time()
     if now - _LAST_SYNC_AT < SETTINGS.sync_closed_seconds:
@@ -70,7 +70,12 @@ def sync_recent_closed(client: PancakeClient, current_epoch: int) -> dict[str, A
     saved = 0
     end = current_epoch - 2
     start = max(1, end - SETTINGS.sync_recent_lookback + 1)
-    for epoch in range(start, end + 1):
+    epochs = range(end, start - 1, -1) if can_continue is not None else range(start, end + 1)
+    for epoch in epochs:
+        if can_continue is not None and not can_continue():
+            # Retry an interrupted cache sweep on the next safe tick.
+            _LAST_SYNC_AT = 0.0
+            break
         try:
             round_data = client.round(epoch)
             if round_data.oracle_called:
@@ -81,10 +86,12 @@ def sync_recent_closed(client: PancakeClient, current_epoch: int) -> dict[str, A
     return {"saved": saved, "from_epoch": start, "to_epoch": end}
 
 
-def settle_finished(client: PancakeClient, current_epoch: int | None = None) -> int:
+def settle_finished(client: PancakeClient, current_epoch: int | None = None, *, can_continue=None) -> int:
     current_epoch = current_epoch or client.current_epoch()
     settled_count = 0
     for decision in db.unsettled_decisions(limit=200):
+        if can_continue is not None and not can_continue():
+            break
         epoch = int(decision["betting_epoch"])
         if epoch > current_epoch - 2:
             continue
@@ -362,12 +369,14 @@ def create_mirrored_decision(snapshot) -> dict[str, Any] | None:
     )
 
 
-def reconcile_actual_results(client: PancakeClient, bnb_usd_price: float) -> int:
+def reconcile_actual_results(client: PancakeClient, bnb_usd_price: float, *, can_continue=None) -> int:
     if SETTINGS.execution_mode != "REAL":
         return 0
     executor = live_executor_from_env(client)
     changed = 0
     for decision in db.actual_reconciliation_candidates(limit=50):
+        if can_continue is not None and not can_continue():
+            break
         try:
             before = decision.get("actual_pnl_bnb")
             updated = executor.finalize_actual(decision, bnb_usd_price)
@@ -381,12 +390,18 @@ def reconcile_actual_results(client: PancakeClient, bnb_usd_price: float) -> int
 def tick() -> dict[str, Any]:
     with _TICK_LOCK:
         started = time.time()
+        monotonic_started = time.monotonic()
         client = from_env()
         snapshot = client.market_snapshot()
-        settled = settle_finished(client, snapshot.current_epoch)
-        sync = sync_recent_closed(client, snapshot.current_epoch)
+        snapshot_done_at = time.monotonic()
+        snapshot_done_ms = round((snapshot_done_at - monotonic_started) * 1000, 3)
+        real_mode = SETTINGS.execution_mode == "REAL"
+        # Paper ordering stays unchanged. Real signals come from the paper
+        # reference, so historical settlement is not an input to the next bet.
+        settled = 0 if real_mode else settle_finished(client, snapshot.current_epoch)
+        sync = None if real_mode else sync_recent_closed(client, snapshot.current_epoch)
         snapshot_saved = False
-        if SETTINGS.prelock_seconds <= snapshot.seconds_to_lock <= SETTINGS.snapshot_start_seconds:
+        if not real_mode and SETTINGS.prelock_seconds <= snapshot.seconds_to_lock <= SETTINGS.snapshot_start_seconds:
             snapshot_saved = db.save_snapshot(
                 {
                     **snapshot.to_dict(),
@@ -404,13 +419,23 @@ def tick() -> dict[str, Any]:
             created = decision is not None
         executor_status: dict[str, Any] | None = None
         wallet: dict[str, Any] = {}
+        reconciled_actual = 0
+        maintenance_deferred = False
         if SETTINGS.execution_mode == "REAL":
             executor = live_executor_from_env(client)
             if decision and bool(decision.get("execution_requested")):
                 has_tx = bool(decision.get("tx_hash"))
                 if has_tx or snapshot.decision_window:
                     try:
-                        decision = executor.execute_bet(decision, float(snapshot.chainlink_price))
+                        decision = executor.execute_bet(decision, float(snapshot.chainlink_price),
+                            tick_context={
+                                "snapshot_done_ms": snapshot_done_ms,
+                                "before_execute_ms": round((time.monotonic() - monotonic_started) * 1000, 3),
+                                "chain_timestamp": snapshot.chain_timestamp,
+                                "epoch": snapshot.betting_epoch,
+                                "seconds_to_lock": snapshot.seconds_to_lock,
+                                "decision_window": snapshot.decision_window,
+                            })
                     except Exception as exc:
                         decision = db.update_execution(
                             int(decision["betting_epoch"]),
@@ -418,12 +443,37 @@ def tick() -> dict[str, Any]:
                             execution_error=f"{type(exc).__name__}: {exc}",
                             trade_executed=False,
                         )
+            # Keep claims/settlement/cache work away from the next entry.
+            # A short cooperative budget prevents an old backlog from consuming
+            # a whole round. In-flight RPCs still have their normal timeout.
+            maintenance_started = time.monotonic()
+            guard_seconds = max(SETTINGS.snapshot_start_seconds,
+                                SETTINGS.prelock_seconds + SETTINGS.transaction_timeout_seconds + 60)
+
+            def can_maintain():
+                now = time.monotonic()
+                remaining = snapshot.seconds_to_lock - (now - snapshot_done_at)
+                return (now - maintenance_started < 5 and
+                        (remaining > guard_seconds or snapshot.seconds_to_lock < SETTINGS.min_decision_seconds))
+
+            maintenance_deferred = not can_maintain()
+            if can_maintain():
+                settled = settle_finished(client, snapshot.current_epoch, can_continue=can_maintain)
+            if can_maintain():
+                sync = sync_recent_closed(client, snapshot.current_epoch, can_continue=can_maintain)
+            if SETTINGS.prelock_seconds <= snapshot.seconds_to_lock <= SETTINGS.snapshot_start_seconds:
+                snapshot_saved = db.save_snapshot({**snapshot.to_dict(),
+                    "bull_amount_bnb": snapshot.betting_round.bull_amount_bnb,
+                    "bear_amount_bnb": snapshot.betting_round.bear_amount_bnb})
             try:
-                wallet = executor.wallet_snapshot(float(snapshot.chainlink_price))
+                wallet = executor.wallet_snapshot(float(snapshot.chainlink_price)) if can_maintain() else {}
             except Exception as exc:
                 wallet = {"error": f"{type(exc).__name__}: {exc}"}
             executor_status = executor.status()
-        reconciled_actual = reconcile_actual_results(client, float(snapshot.chainlink_price))
+            if can_maintain():
+                reconciled_actual = reconcile_actual_results(client, float(snapshot.chainlink_price), can_continue=can_maintain)
+        else:
+            reconciled_actual = reconcile_actual_results(client, float(snapshot.chainlink_price))
         state = db.get_state()
         result = {
             "ok": True,
@@ -445,6 +495,8 @@ def tick() -> dict[str, Any]:
             "fixed_stake": SETTINGS.fixed_stake,
             "min_trade_ev": SETTINGS.min_trade_ev,
             "min_signal_probability": SETTINGS.min_signal_probability,
+            "maintenance_deferred_for_entry": maintenance_deferred,
+            "snapshot_done_ms": snapshot_done_ms,
             "settled_now": settled,
             "actual_results_reconciled_now": reconciled_actual,
             "sync": sync,

@@ -10,6 +10,7 @@ from web3.middleware import ExtraDataToPOAMiddleware
 
 from .abi import CHAINLINK_ABI, PREDICTION_ABI
 from .config import SETTINGS
+from .execution_diagnostics import CURRENT_TRACE
 from .models import MarketSnapshot, RoundData
 
 
@@ -43,19 +44,33 @@ class PancakeClient:
     def _rotate(self) -> None:
         self._active = (self._active + 1) % len(self._providers)
 
-    def _call(self, fn, attempts: int | None = None):
+    def _call(self, fn, attempts: int | None = None, *, operation: str = "rpc"):
         attempts = attempts or max(2, len(self._providers) * 2)
         last_error: Exception | None = None
+        waiting = time.monotonic()
         with self._lock:
-            for _ in range(attempts):
+            wait_ms = round((time.monotonic() - waiting) * 1000, 3)
+            for attempt in range(attempts):
                 url = self.active_url
+                provider_index = self._active
+                started = time.monotonic()
+                error_type = None
                 try:
                     return fn(self.web3)
                 except Exception as exc:  # RPC failures must trigger fallback.
+                    error_type = type(exc).__name__
                     last_error = exc
                     self._last_errors[url] = f"{type(exc).__name__}: {exc}"
                     self._rotate()
                     time.sleep(0.15)
+                finally:
+                    trace = CURRENT_TRACE.get()
+                    if trace is not None:
+                        trace.rpc({"operation": operation, "attempt": attempt + 1,
+                            "provider_index": provider_index, "lock_wait_ms": wait_ms,
+                            "duration_ms": round((time.monotonic() - started) * 1000, 3),
+                            "exception_type": error_type})
+                    wait_ms = 0.0
         raise RuntimeError(f"All BSC RPC endpoints failed: {last_error}")
 
     def is_connected(self) -> bool:
@@ -79,13 +94,13 @@ class PancakeClient:
         )
 
     def current_epoch(self) -> int:
-        return int(self._call(lambda w3: self._prediction(w3).functions.currentEpoch().call()))
+        return int(self._call(lambda w3: self._prediction(w3).functions.currentEpoch().call(), operation="current_epoch"))
 
     def chain_timestamp(self) -> int:
-        return int(self._call(lambda w3: w3.eth.get_block("latest")["timestamp"]))
+        return int(self._call(lambda w3: w3.eth.get_block("latest")["timestamp"], operation="chain_timestamp"))
 
     def round(self, epoch: int) -> RoundData:
-        raw = self._call(lambda w3: self._prediction(w3).functions.rounds(int(epoch)).call())
+        raw = self._call(lambda w3: self._prediction(w3).functions.rounds(int(epoch)).call(), operation="round")
         values = list(raw)
         if len(values) < 14:
             raise RuntimeError(f"Unexpected rounds() response length: {len(values)}")
@@ -128,7 +143,7 @@ class PancakeClient:
             result = contract.functions.latestRoundData().call()
             return int(result[0]), float(result[1]) / (10**decimals), int(result[3])
 
-        return self._call(read)
+        return self._call(read, operation="oracle_price")
 
     def market_snapshot(self) -> MarketSnapshot:
         current_epoch = self.current_epoch()
@@ -182,6 +197,7 @@ class PancakeClient:
 
 
 _CLIENT: PancakeClient | None = None
+_OBSERVER_CLIENT: PancakeClient | None = None
 _CLIENT_LOCK = threading.Lock()
 
 
@@ -191,3 +207,12 @@ def from_env() -> PancakeClient:
         if _CLIENT is None:
             _CLIENT = PancakeClient()
         return _CLIENT
+
+
+def observer_from_env() -> PancakeClient:
+    """Dashboard RPC reads must not hold the worker/executor provider lock."""
+    global _OBSERVER_CLIENT
+    with _CLIENT_LOCK:
+        if _OBSERVER_CLIENT is None:
+            _OBSERVER_CLIENT = PancakeClient()
+        return _OBSERVER_CLIENT
