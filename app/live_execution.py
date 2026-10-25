@@ -19,7 +19,8 @@ from .stake_policy import POLICY, stake_quote
 from .pancake_client import PancakeClient, from_env as pancake_from_env
 
 
-_LOG = logging.getLogger(__name__)
+# Uvicorn configures this logger's handler; the root logger may have none.
+_LOG = logging.getLogger("uvicorn.error")
 _LOG.setLevel(logging.INFO)
 
 

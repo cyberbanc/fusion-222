@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 import threading
 
 import pytest
@@ -59,3 +61,14 @@ def test_trace_context_is_not_shared_with_other_threads():
     finally:
         CURRENT_TRACE.reset(token)
     assert observed == [None]
+
+
+def test_execution_info_is_emitted_with_production_uvicorn_logging():
+    result = subprocess.run([sys.executable, "-c", """
+from logging.config import dictConfig
+from uvicorn.config import LOGGING_CONFIG
+from app.live_execution import _LOG
+dictConfig(LOGGING_CONFIG)
+_LOG.info('execution_diagnostics logging_smoke')
+"""], capture_output=True, text=True, check=True)
+    assert "execution_diagnostics logging_smoke" in result.stderr
