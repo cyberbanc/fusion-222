@@ -69,8 +69,10 @@ def study_summary(store,account):
     return {'account_id':account,'cells':list(result.values()),'excursions':excursions,'note':CONFIG['study_note']}
 
 
-def history_archive(store):
-    output=tempfile.SpooledTemporaryFile(max_size=8*1024*1024,mode='w+b')
+def history_archive(store, output=None):
+    owns_output = output is None
+    if owns_output:
+        output=tempfile.SpooledTemporaryFile(max_size=8*1024*1024,mode='w+b')
     counts={};hashes={};export_ts=int(time.time())
     with store.export_snapshot() as reader,zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED,compresslevel=5) as z:
         for kind in sorted(KINDS):
@@ -122,7 +124,8 @@ def history_archive(store):
             'При неизвестном порядке касаний в минутной свече выбран стоп первым. Внутри первой неполной минуты учитываются только наблюдаемые котировки.\n'
             'Параметры комиссий и проскальзывания — допущения. Funding учитывается по опубликованной ставке с минутным приближением цены.\n'
             'Исходные JSONL содержат вложенные данные полностью. Их SHA256 и количества указаны в manifest.json.\n')
-    output.seek(0)
+    if owns_output:
+        output.seek(0)
     return output,counts
 
 
@@ -149,6 +152,9 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError,ConnectionResetError):pass
         except Exception as exc:
             self.store.event('ERROR','Ошибка чтения API',error=type(exc).__name__,path=self.path[:120])
+            if getattr(self,'_archive_response_started',False):
+                self.close_connection=True
+                return
             self.send_json({'error':'Не удалось получить данные. Повторите запрос.'},500)
     def get(self):
         path=urlparse(self.path);q=parse_qs(path.query)
@@ -171,17 +177,18 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({'rows':rows,'total':self.store.count(kind,account),
                 'next_before':rows[-1]['created_ts'] if len(rows)==limit else None})
         if path.path=='/exports/history.zip':
-            output,_=history_archive(self.store)
-            output.seek(0,2);length=output.tell();output.seek(0)
-            self.headers_out(content_type='application/zip',length=length)
+            # Send headers before generating the full repeatable-read archive.
+            # HTTP/1.0 closes the connection to delimit this streaming response;
+            # ZIP member CRC/SHA/count proofs remain unchanged.
+            self.close_connection=True
+            self.headers_out(content_type='application/zip')
             self.send_header('Content-Disposition','attachment; filename="fusion-trend-full-history.zip"')
+            self.send_header('Connection','close')
             self.end_headers()
-            try:
-                while True:
-                    chunk=output.read(128*1024)
-                    if not chunk:break
-                    self.wfile.write(chunk)
-            finally:output.close()
+            self.wfile.flush()
+            self._archive_response_started=True
+            history_archive(self.store,self.wfile)
+            self.wfile.flush()
             return
         return self.send_json({'error':'Not found'},404)
 
@@ -199,3 +206,4 @@ def main():
 
 
 if __name__=='__main__':main()
+
